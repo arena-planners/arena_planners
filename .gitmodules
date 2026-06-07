@@ -14,3 +14,7 @@
 	path = planners/kdma
 	url = https://github.com/arena-planners/kdma.git
 	planner = kdma
+[submodule "planners/rlrvo"]
+	path = planners/rlrvo
+	url = https://github.com/arena-planners/rlrvo.git
+	planner = rlrvo
