@@ -11,7 +11,7 @@ from arena_planners.bridge.transport import (
     ZmqPullTransport,
     ZmqPushTransport,
     endpoints_from_env,
-    generate_pair,
+    generate_transport_set,
 )
 
 PAYLOAD = b"hello-frame"
@@ -80,20 +80,22 @@ def test_tcp_round_trip():
 # ---------------------------------------------------------------------------
 
 
-def test_generate_pair_ipc_distinct():
-    pair = generate_pair("ipc")
-    assert pair.obs.kind == "ipc"
-    assert pair.action.kind == "ipc"
-    assert pair.obs.endpoint.startswith("ipc:///tmp/arena_planner_")
-    assert pair.action.endpoint.startswith("ipc:///tmp/arena_planner_")
-    assert pair.obs.endpoint != pair.action.endpoint
+def test_generate_transport_set_ipc_distinct():
+    ts = generate_transport_set("ipc")
+    eps = {ts.obs.endpoint, ts.action.endpoint, ts.control.endpoint, ts.ctrl_ack.endpoint}
+    assert len(eps) == 4, "all four endpoints must be unique"
+    for ep in eps:
+        assert ep.startswith("ipc:///tmp/arena_planner_")
 
 
-def test_generate_pair_ipc_unique_across_calls():
-    pair_a = generate_pair("ipc")
-    pair_b = generate_pair("ipc")
-    all_eps = {pair_a.obs.endpoint, pair_a.action.endpoint, pair_b.obs.endpoint, pair_b.action.endpoint}
-    assert len(all_eps) == 4, "UUID socket paths must be unique across calls"
+def test_generate_transport_set_ipc_unique_across_calls():
+    a = generate_transport_set("ipc")
+    b = generate_transport_set("ipc")
+    eps = {
+        a.obs.endpoint, a.action.endpoint, a.control.endpoint, a.ctrl_ack.endpoint,
+        b.obs.endpoint, b.action.endpoint, b.control.endpoint, b.ctrl_ack.endpoint,
+    }
+    assert len(eps) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -101,31 +103,38 @@ def test_generate_pair_ipc_unique_across_calls():
 # ---------------------------------------------------------------------------
 
 
+_ENV_KEYS = (
+    "ARENA_PLANNER_OBS_ENDPOINT",
+    "ARENA_PLANNER_ACTION_ENDPOINT",
+    "ARENA_PLANNER_CONTROL_ENDPOINT",
+    "ARENA_PLANNER_CTRL_ACK_ENDPOINT",
+)
+
+
 def test_endpoints_from_env_happy(monkeypatch):
-    monkeypatch.setenv("ARENA_PLANNER_OBS_ENDPOINT", "ipc:///tmp/obs.sock")
-    monkeypatch.setenv("ARENA_PLANNER_ACTION_ENDPOINT", "ipc:///tmp/action.sock")
-    obs_ep, action_ep = endpoints_from_env()
-    assert obs_ep == "ipc:///tmp/obs.sock"
-    assert action_ep == "ipc:///tmp/action.sock"
+    for k in _ENV_KEYS:
+        monkeypatch.setenv(k, f"ipc:///tmp/{k.lower()}.sock")
+    obs, action, control, ctrl_ack = endpoints_from_env()
+    assert obs == "ipc:///tmp/arena_planner_obs_endpoint.sock"
+    assert action == "ipc:///tmp/arena_planner_action_endpoint.sock"
+    assert control == "ipc:///tmp/arena_planner_control_endpoint.sock"
+    assert ctrl_ack == "ipc:///tmp/arena_planner_ctrl_ack_endpoint.sock"
 
 
-def test_endpoints_from_env_missing_obs(monkeypatch):
-    monkeypatch.delenv("ARENA_PLANNER_OBS_ENDPOINT", raising=False)
-    monkeypatch.setenv("ARENA_PLANNER_ACTION_ENDPOINT", "ipc:///tmp/action.sock")
-    with pytest.raises(RuntimeError, match="ARENA_PLANNER_OBS_ENDPOINT"):
+@pytest.mark.parametrize("missing", _ENV_KEYS)
+def test_endpoints_from_env_missing_one(monkeypatch, missing):
+    for k in _ENV_KEYS:
+        if k == missing:
+            monkeypatch.delenv(k, raising=False)
+        else:
+            monkeypatch.setenv(k, f"ipc:///tmp/{k}.sock")
+    with pytest.raises(RuntimeError, match=missing):
         endpoints_from_env()
 
 
-def test_endpoints_from_env_missing_action(monkeypatch):
-    monkeypatch.setenv("ARENA_PLANNER_OBS_ENDPOINT", "ipc:///tmp/obs.sock")
-    monkeypatch.delenv("ARENA_PLANNER_ACTION_ENDPOINT", raising=False)
-    with pytest.raises(RuntimeError, match="ARENA_PLANNER_ACTION_ENDPOINT"):
-        endpoints_from_env()
-
-
-def test_endpoints_from_env_both_missing(monkeypatch):
-    monkeypatch.delenv("ARENA_PLANNER_OBS_ENDPOINT", raising=False)
-    monkeypatch.delenv("ARENA_PLANNER_ACTION_ENDPOINT", raising=False)
+def test_endpoints_from_env_all_missing(monkeypatch):
+    for k in _ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
     with pytest.raises(RuntimeError):
         endpoints_from_env()
 

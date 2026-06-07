@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
+import math
 import os
 import queue
 import signal
@@ -11,6 +13,13 @@ import subprocess
 import threading
 import typing
 import uuid
+
+_PR_SET_PDEATHSIG = 1
+_libc = ctypes.CDLL("libc.so.6", use_errno=True)
+
+
+def _die_with_parent() -> None:
+    _libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
 
 import geometry_msgs.msg
 import numpy as np
@@ -26,6 +35,7 @@ from .protocol import (
     Cancel,
     CancelAck,
     Frame,
+    Heartbeat,
     Init,
     InitAck,
     Obs,
@@ -39,10 +49,11 @@ from .protocol import (
 from .transport import (
     OBS_POLICY_LATEST_ONLY,
     OBS_POLICY_LOSSLESS,
-    TransportPair,
+    TransportSet,
     ZmqPullTransport,
     ZmqPushTransport,
-    generate_pair,
+    env_from_endpoints,
+    generate_transport_set,
 )
 
 if typing.TYPE_CHECKING:
@@ -55,7 +66,7 @@ class PlannerProcess:
     def __init__(
         self,
         command: list[str],
-        endpoints: TransportPair,
+        endpoints: TransportSet,
         extra_env: dict[str, str] | None = None,
     ) -> None:
         self._command = command
@@ -65,12 +76,12 @@ class PlannerProcess:
 
     def start(self) -> None:
         env = os.environ.copy()
-        env["ARENA_PLANNER_OBS_ENDPOINT"] = self._endpoints.obs.endpoint
-        env["ARENA_PLANNER_ACTION_ENDPOINT"] = self._endpoints.action.endpoint
+        env.update(env_from_endpoints(self._endpoints))
         env.update(self._extra_env)
         self._proc = subprocess.Popen(
             self._command,
             start_new_session=True,
+            preexec_fn=_die_with_parent,
             env=env,
         )
 
@@ -134,6 +145,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         namespace: str = "",
         source_frame: str = "",
         target_frame: str = "map",
+        is_holonomic: bool = False,
         **kwargs: object,
     ) -> None:
         super().__init__(node_name, namespace=namespace, use_global_arguments=False, **kwargs)
@@ -142,11 +154,14 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._cmd_vel_topic = cmd_vel_topic
         self._source_frame = source_frame
         self._target_frame = target_frame
+        self._is_holonomic = bool(is_holonomic)
 
         self._obs_manager: Pipeline | None = None
         self._proc: PlannerProcess | None = None
-        self._push: ZmqPushTransport | None = None
-        self._pull: ZmqPullTransport | None = None
+        self._data_push: ZmqPushTransport | None = None
+        self._data_pull: ZmqPullTransport | None = None
+        self._control_push: ZmqPushTransport | None = None
+        self._control_pull: ZmqPullTransport | None = None
         self._run_id: str = uuid.uuid4().hex
 
         self._obs_queue: queue.Queue[bytes] = queue.Queue()
@@ -157,6 +172,9 @@ class PlannerEdgeNode(ArenaMixinNode):
 
         self._cmd_vel_pub: rclpy.publisher.Publisher | None = None
         self._seq: int = 0
+        self._last_heartbeat_ns: int = 0
+        self._heartbeat_period_s: float = 0.0
+        self._control_ack_timeout_s: float = 5.0
 
         self._rate = self.ROSParam[float]("planner_rate_hz", 10.0)
         self._action_timeout = self.ROSParam[float]("planner_action_timeout_s", 0.5)
@@ -171,8 +189,9 @@ class PlannerEdgeNode(ArenaMixinNode):
         manifest = _load_manifest(self._manifest_raw)
         obs_config = manifest.get("observations") or {}
         action_type = manifest.get("action_type", "differential_drive")
+        self._control_ack_timeout_s = float(manifest.get("control_ack_timeout_s", 5.0))
 
-        endpoints = generate_pair()
+        endpoints = generate_transport_set()
 
         self._cmd_vel_pub = self.create_publisher(
             geometry_msgs.msg.Twist,
@@ -194,18 +213,10 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._proc = PlannerProcess(self._planner_command, endpoints)
         self._proc.start()
 
-        # Bind the edge sockets; planner side connects (planner reads obs, edge reads actions).
-        # Create with lossless defaults first; reconfigure after init_ack if needed.
-        self._push = ZmqPushTransport(
-            endpoints.obs.endpoint,
-            mode="bind",
-            obs_policy=OBS_POLICY_LOSSLESS,
-        )
-        self._pull = ZmqPullTransport(
-            endpoints.action.endpoint,
-            mode="bind",
-            obs_policy=OBS_POLICY_LOSSLESS,
-        )
+        self._data_push = ZmqPushTransport(endpoints.obs.endpoint, mode="bind", obs_policy=OBS_POLICY_LOSSLESS)
+        self._data_pull = ZmqPullTransport(endpoints.action.endpoint, mode="bind", obs_policy=OBS_POLICY_LOSSLESS)
+        self._control_push = ZmqPushTransport(endpoints.control.endpoint, mode="bind", control=True)
+        self._control_pull = ZmqPullTransport(endpoints.ctrl_ack.endpoint, mode="bind", control=True)
 
         init_frame = Init(
             protocol_version=PROTOCOL_VERSION,
@@ -215,13 +226,13 @@ class PlannerEdgeNode(ArenaMixinNode):
             planner_config={},
             run_id=self._run_id,
         )
-        self._push.send_frame(encode_frame(init_frame))
+        self._control_push.send_frame(encode_frame(init_frame))
 
         deadline = self.event_loop.time() + self._init_timeout.value
         init_ack_buf: bytes | None = None
         while True:
-            if self._pull.poll(timeout_ms=200):
-                init_ack_buf = self._pull.recv_frame()
+            if self._control_pull.poll(timeout_ms=200):
+                init_ack_buf = self._control_pull.recv_frame()
                 break
             if not self._proc.is_alive():
                 rc = self._proc.returncode
@@ -240,37 +251,25 @@ class PlannerEdgeNode(ArenaMixinNode):
 
         caps: dict = init_ack.capabilities if isinstance(init_ack.capabilities, dict) else {}
         obs_policy_str: str = caps.get("obs_policy", OBS_POLICY_LOSSLESS)
+        self._heartbeat_period_s = float(caps.get("heartbeat_period_s", 0.0))
 
         if obs_policy_str == OBS_POLICY_LATEST_ONLY:
-            # Recreate sockets with conflate; the planner has already connected so the
-            # new bind will be on the same ipc path after the old socket is closed.
-            self._push.close()
-            self._pull.close()
-            self._push = ZmqPushTransport(
-                endpoints.obs.endpoint,
-                mode="bind",
-                obs_policy=OBS_POLICY_LATEST_ONLY,
-            )
-            self._pull = ZmqPullTransport(
-                endpoints.action.endpoint,
-                mode="bind",
-                obs_policy=OBS_POLICY_LATEST_ONLY,
-            )
+            self._data_push.close()
+            self._data_pull.close()
+            policy = OBS_POLICY_LATEST_ONLY
+            self._data_push = ZmqPushTransport(endpoints.obs.endpoint, mode="bind", obs_policy=policy)
+            self._data_pull = ZmqPullTransport(endpoints.action.endpoint, mode="bind", obs_policy=policy)
 
         self._io_stop.clear()
-        self._io_thread = threading.Thread(
-            target=self._io_loop,
-            name="planner-io",
-            daemon=True,
-        )
+        self._io_thread = threading.Thread(target=self._io_loop, name="planner-io", daemon=True)
         self._io_thread.start()
 
     async def teardown(self) -> None:
-        if self._push is not None:
+        if self._control_push is not None:
             try:
-                self._push.send_frame(encode_frame(Shutdown()))
-                if self._pull is not None and self._pull.poll(2000):
-                    bye = decode_frame(self._pull.recv_frame())
+                self._control_push.send_frame(encode_frame(Shutdown()))
+                if self._control_pull is not None and self._control_pull.poll(2000):
+                    bye = decode_frame(self._control_pull.recv_frame())
                     if not isinstance(bye, Bye):
                         self.get_logger().warning(f"expected bye, got {bye!r}")
             except Exception as exc:
@@ -284,10 +283,9 @@ class PlannerEdgeNode(ArenaMixinNode):
         if self._proc is not None:
             rc = self._proc.stop()
 
-        if self._push is not None:
-            self._push.close()
-        if self._pull is not None:
-            self._pull.close()
+        for sock in (self._data_push, self._data_pull, self._control_push, self._control_pull):
+            if sock is not None:
+                sock.close()
 
         if self._obs_manager is not None:
             self._obs_manager.shutdown()
@@ -300,23 +298,36 @@ class PlannerEdgeNode(ArenaMixinNode):
     # ------------------------------------------------------------------
 
     def _io_loop(self) -> None:
-        """Dedicated I/O thread: drains _obs_queue out, routes incoming frames in."""
+        """Dedicated I/O thread: drains _obs_queue to data_push, routes data_pull → action_queue,
+        control_pull → ack_queue. Heartbeats arrive on control_pull and update last-seen."""
         loop = self.event_loop
         while not self._io_stop.is_set():
             try:
                 buf = self._obs_queue.get_nowait()
-                if self._push is not None:
-                    self._push.send_frame(buf)
+                if self._data_push is not None:
+                    self._data_push.send_frame(buf)
             except queue.Empty:
                 pass
 
-            if self._pull is not None and self._pull.poll(timeout_ms=10):
+            if self._data_pull is not None and self._data_pull.poll(timeout_ms=10):
                 try:
-                    frame = decode_frame(self._pull.recv_frame())
-                    target = self._action_queue if isinstance(frame, Action) else self._ack_queue
-                    loop.call_soon_threadsafe(target.put_nowait, frame)
+                    frame = decode_frame(self._data_pull.recv_frame())
+                    if isinstance(frame, Action):
+                        loop.call_soon_threadsafe(self._action_queue.put_nowait, frame)
+                    else:
+                        self.get_logger().warning(f"unexpected frame on data channel: {frame!r}")
                 except Exception as exc:
-                    self.get_logger().error(f"IO thread decode error: {exc}")
+                    self.get_logger().error(f"IO thread data decode error: {exc}")
+
+            if self._control_pull is not None and self._control_pull.poll(timeout_ms=0):
+                try:
+                    frame = decode_frame(self._control_pull.recv_frame())
+                    if isinstance(frame, Heartbeat):
+                        self._last_heartbeat_ns = frame.monotonic_ns
+                    else:
+                        loop.call_soon_threadsafe(self._ack_queue.put_nowait, frame)
+                except Exception as exc:
+                    self.get_logger().error(f"IO thread control decode error: {exc}")
 
             if not self._proc or not self._proc.is_alive():
                 self.get_logger().error("planner process died unexpectedly")
@@ -363,7 +374,12 @@ class PlannerEdgeNode(ArenaMixinNode):
                         continue
 
                     if isinstance(frame, Action):
-                        self._publish_action(frame)
+                        if frame.seq > self._seq:
+                            self.get_logger().warning(
+                                f"discarding impossible Action seq={frame.seq} > sent={self._seq}"
+                            )
+                            continue
+                        self._publish_action(frame, features)
                     else:
                         self.get_logger().warning(
                             f"unexpected non-Action frame on action queue seq={self._seq}: "
@@ -379,9 +395,9 @@ class PlannerEdgeNode(ArenaMixinNode):
 
     async def request_cancel(self) -> None:
         """Send Cancel and await CancelAck."""
-        assert self._push is not None
-        self._push.send_frame(encode_frame(Cancel()))
-        frame = await self._drain_until(CancelAck, timeout=5.0)
+        assert self._control_push is not None
+        self._control_push.send_frame(encode_frame(Cancel()))
+        frame = await self._drain_until(CancelAck, timeout=self._control_ack_timeout_s)
         if not isinstance(frame, CancelAck):
             raise ProtocolError(f"expected cancel_ack, got {frame!r}")
 
@@ -391,10 +407,10 @@ class PlannerEdgeNode(ArenaMixinNode):
         initial_state: dict | None = None,
     ) -> None:
         """Send Reset and await ResetAck; warn if round-trip exceeds one sim step."""
-        assert self._push is not None
+        assert self._control_push is not None
         t_before = self.sim_time
-        self._push.send_frame(encode_frame(Reset(episode_id=episode_id, initial_state=initial_state)))
-        frame = await self._drain_until(ResetAck, timeout=5.0)
+        self._control_push.send_frame(encode_frame(Reset(episode_id=episode_id, initial_state=initial_state)))
+        frame = await self._drain_until(ResetAck, timeout=self._control_ack_timeout_s)
         if not isinstance(frame, ResetAck):
             raise ProtocolError(f"expected reset_ack, got {frame!r}")
         t_after = self.sim_time
@@ -434,22 +450,46 @@ class PlannerEdgeNode(ArenaMixinNode):
                 return frame
             self.get_logger().warning(f"discarding unexpected frame while waiting for {target.__name__}: {frame!r}")
 
-    def _publish_action(self, action: Action) -> None:
+    def _publish_action(self, action: Action, features: dict) -> None:
         if self._cmd_vel_pub is None:
             return
+        from arena_planners.bridge.projection import (  # noqa: PLC0415
+            project_holonomic_to_diff_drive,
+            unpack_differential_drive,
+            unpack_omnidirectional,
+        )
+
         msg = geometry_msgs.msg.Twist()
-        if action.action_type in ("differential_drive",):
-            if len(action.action) >= 1:
-                msg.linear.x = float(action.action[0])
-            if len(action.action) >= 2:
-                msg.angular.z = float(action.action[-1])
-        elif action.action_type in ("omnidirectional",):
-            if len(action.action) >= 1:
-                msg.linear.x = float(action.action[0])
-            if len(action.action) >= 2:
-                msg.linear.y = float(action.action[1])
-            if len(action.action) >= 3:
-                msg.angular.z = float(action.action[2])
+        if action.action_type == "differential_drive":
+            try:
+                v, omega = unpack_differential_drive(action.action)
+            except ValueError as exc:
+                self.get_logger().warning(str(exc))
+                return
+            msg.linear.x = v
+            msg.angular.z = omega
+        elif action.action_type == "omnidirectional":
+            try:
+                vx, vy, omega_in = unpack_omnidirectional(action.action)
+            except ValueError as exc:
+                self.get_logger().warning(str(exc))
+                return
+            robot_pose = features.get("robot_pose") if features else None
+            if robot_pose is None or len(robot_pose) < 3:
+                self.get_logger().warning("cannot apply omnidirectional action: robot_pose missing or malformed")
+                return
+            theta = float(robot_pose[2])
+            if self._is_holonomic:
+                cos_t = math.cos(theta)
+                sin_t = math.sin(theta)
+                msg.linear.x = vx * cos_t + vy * sin_t
+                msg.linear.y = -vx * sin_t + vy * cos_t
+                msg.angular.z = omega_in
+            else:
+                step_dt_s = 1.0 / float(self._rate.value)
+                v, omega = project_holonomic_to_diff_drive(vx, vy, omega_in, theta, step_dt_s)
+                msg.linear.x = v
+                msg.angular.z = omega
         else:
             self.get_logger().warning(f"unknown action_type {action.action_type!r}")
             return

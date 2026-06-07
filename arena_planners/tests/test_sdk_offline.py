@@ -17,79 +17,86 @@ from arena_planners.bridge.protocol import (
     Reset,
     ResetAck,
     Shutdown,
+    decode_frame,
 )
 from arena_planners.sdk import PlannerSDK
-
-
-def _make_sdk(
-    tmp_obs: str,
-    tmp_action: str,
-    *,
-    action_type: str = "differential_drive",
-    obs_policy: str = "lossless",
-    capabilities: dict | None = None,
-) -> PlannerSDK:
-    os.environ["ARENA_PLANNER_OBS_ENDPOINT"] = tmp_obs
-    os.environ["ARENA_PLANNER_ACTION_ENDPOINT"] = tmp_action
-    return PlannerSDK(
-        manifest={"action_type": action_type, "obs_policy": obs_policy},
-        capabilities=capabilities,
-    )
 
 
 def _never_bound_ipc() -> str:
     return f"ipc:///tmp/never_bound_{uuid.uuid4().hex}.sock"
 
 
+def _make_sdk(
+    *,
+    action_type: str = "differential_drive",
+    obs_policy: str = "lossless",
+    heartbeat_period_s: float = 0.0,
+    capabilities: dict | None = None,
+) -> PlannerSDK:
+    for env in (
+        "ARENA_PLANNER_OBS_ENDPOINT",
+        "ARENA_PLANNER_ACTION_ENDPOINT",
+        "ARENA_PLANNER_CONTROL_ENDPOINT",
+        "ARENA_PLANNER_CTRL_ACK_ENDPOINT",
+    ):
+        os.environ[env] = _never_bound_ipc()
+    manifest = {"action_type": action_type, "obs_policy": obs_policy, "heartbeat_period_s": heartbeat_period_s}
+    return PlannerSDK(manifest=manifest, capabilities=capabilities)
+
+
+def _close(sdk: PlannerSDK) -> None:
+    sdk._data_pull.close()
+    sdk._data_push.close()
+    sdk._control_pull.close()
+    sdk._control_push.close()
+
+
 class TestConstruction:
     def test_init_does_not_block(self) -> None:
-        obs_ep = _never_bound_ipc()
-        action_ep = _never_bound_ipc()
-        sdk = _make_sdk(obs_ep, action_ep)
-        sdk._pull.close()
-        sdk._push.close()
+        sdk = _make_sdk()
+        _close(sdk)
 
     def test_init_stores_action_type(self) -> None:
-        obs_ep = _never_bound_ipc()
-        action_ep = _never_bound_ipc()
-        sdk = _make_sdk(obs_ep, action_ep, action_type="omnidirectional")
+        sdk = _make_sdk(action_type="omnidirectional")
         assert sdk._action_type == "omnidirectional"
-        sdk._pull.close()
-        sdk._push.close()
+        _close(sdk)
 
     def test_init_stores_obs_policy(self) -> None:
-        obs_ep = _never_bound_ipc()
-        action_ep = _never_bound_ipc()
-        sdk = _make_sdk(obs_ep, action_ep, obs_policy="latest_only")
+        sdk = _make_sdk(obs_policy="latest_only")
         assert sdk._obs_policy == "latest_only"
-        sdk._pull.close()
-        sdk._push.close()
+        _close(sdk)
 
     def test_init_merges_extra_capabilities(self) -> None:
-        obs_ep = _never_bound_ipc()
-        action_ep = _never_bound_ipc()
-        sdk = _make_sdk(obs_ep, action_ep, capabilities={"model": "drlvo"})
+        sdk = _make_sdk(capabilities={"model": "drlvo"})
         assert sdk._extra_capabilities == {"model": "drlvo"}
-        sdk._pull.close()
-        sdk._push.close()
+        _close(sdk)
+
+    def test_init_rejects_unknown_action_type(self) -> None:
+        for env in (
+            "ARENA_PLANNER_OBS_ENDPOINT",
+            "ARENA_PLANNER_ACTION_ENDPOINT",
+            "ARENA_PLANNER_CONTROL_ENDPOINT",
+            "ARENA_PLANNER_CTRL_ACK_ENDPOINT",
+        ):
+            os.environ[env] = _never_bound_ipc()
+        with pytest.raises(ValueError, match="action_type"):
+            PlannerSDK(manifest={"action_type": "tractor_beam"})
 
 
-class TestHandleFrame:
-    def _sdk(self) -> PlannerSDK:
-        obs_ep = _never_bound_ipc()
-        action_ep = _never_bound_ipc()
-        sdk = _make_sdk(obs_ep, action_ep, action_type="differential_drive")
-        return sdk
+class TestHandleObs:
+    def test_obs_sends_action_on_data_channel(self) -> None:
+        sdk = _make_sdk(action_type="differential_drive")
+        captured: list[bytes] = []
+        sdk._data_push.send_frame = lambda buf: captured.append(buf)
 
-    def _step_fn(self, features: dict) -> list[float]:
-        return [0.5, 0.1]
+        sdk._handle_obs(
+            Obs(t_sec=10, t_nanosec=500, seq=3, features={"laser": [1.0, 2.0]}),
+            lambda f: [0.5, 0.1],
+        )
+        _close(sdk)
 
-    def test_obs_returns_action(self) -> None:
-        sdk = self._sdk()
-        frame = Obs(t_sec=10, t_nanosec=500, seq=3, features={"laser": [1.0, 2.0]})
-        response = sdk._handle_frame(frame, self._step_fn, None, None)
-        sdk._pull.close()
-        sdk._push.close()
+        assert len(captured) == 1
+        response = decode_frame(captured[0])
         assert isinstance(response, Action)
         assert response.t_sec == 10
         assert response.t_nanosec == 500
@@ -97,100 +104,81 @@ class TestHandleFrame:
         assert response.action_type == "differential_drive"
         assert response.action == [0.5, 0.1]
 
-    def test_obs_step_fn_receives_features(self) -> None:
-        sdk = self._sdk()
-        received: list[dict] = []
+    def test_obs_step_fn_raise_emits_error_and_reraises(self) -> None:
+        sdk = _make_sdk()
+        captured: list[bytes] = []
+        sdk._data_push.send_frame = lambda buf: captured.append(buf)
 
-        def capturing_step(features: dict) -> list[float]:
-            received.append(features)
-            return [0.0, 0.0]
-
-        frame = Obs(t_sec=1, t_nanosec=0, seq=0, features={"x": 42})
-        sdk._handle_frame(frame, capturing_step, None, None)
-        sdk._pull.close()
-        sdk._push.close()
-        assert received == [{"x": 42}]
-
-    def test_obs_step_fn_raises_re_raises(self) -> None:
-        sdk = self._sdk()
-        sent_frames: list[bytes] = []
-        sdk._push.send_frame = lambda buf: sent_frames.append(buf)
-
-        def failing_step(features: dict) -> list[float]:
-            raise ValueError("boom")
-
-        frame = Obs(t_sec=0, t_nanosec=0, seq=0, features={})
         with pytest.raises(ValueError, match="boom"):
-            sdk._handle_frame(frame, failing_step, None, None)
-        sdk._pull.close()
-        sdk._push.close()
-        assert len(sent_frames) == 1
+            sdk._handle_obs(Obs(seq=0, features={}), lambda f: (_ for _ in ()).throw(ValueError("boom")))
+        _close(sdk)
 
-    def test_reset_calls_on_reset_and_returns_reset_ack(self) -> None:
-        sdk = self._sdk()
+        assert len(captured) == 1
+        err = decode_frame(captured[0])
+        assert isinstance(err, Error)
+        assert err.code == "step_failed"
+
+
+class TestHandleControl:
+    def test_reset_calls_on_reset_and_acks(self) -> None:
+        sdk = _make_sdk()
+        captured: list[bytes] = []
+        sdk._control_push.send_frame = lambda buf: captured.append(buf)
         calls: list[tuple] = []
 
-        def on_reset(episode_id: str, initial_state: dict | None) -> None:
-            calls.append((episode_id, initial_state))
+        keep_going = sdk._handle_control(
+            Reset(episode_id="ep_42", initial_state={"pos": [0.0, 0.0]}),
+            lambda eid, state: calls.append((eid, state)),
+            None,
+        )
+        _close(sdk)
 
-        frame = Reset(episode_id="ep_42", initial_state={"pos": [0.0, 0.0]})
-        response = sdk._handle_frame(frame, self._step_fn, on_reset, None)
-        sdk._pull.close()
-        sdk._push.close()
-        assert isinstance(response, ResetAck)
+        assert keep_going is True
         assert calls == [("ep_42", {"pos": [0.0, 0.0]})]
+        assert isinstance(decode_frame(captured[0]), ResetAck)
 
-    def test_reset_without_on_reset_returns_reset_ack(self) -> None:
-        sdk = self._sdk()
-        frame = Reset(episode_id="ep_0")
-        response = sdk._handle_frame(frame, self._step_fn, None, None)
-        sdk._pull.close()
-        sdk._push.close()
-        assert isinstance(response, ResetAck)
+    def test_reset_without_callback_still_acks(self) -> None:
+        sdk = _make_sdk()
+        captured: list[bytes] = []
+        sdk._control_push.send_frame = lambda buf: captured.append(buf)
 
-    def test_cancel_calls_on_cancel_and_returns_cancel_ack(self) -> None:
-        sdk = self._sdk()
+        sdk._handle_control(Reset(episode_id="ep_0"), None, None)
+        _close(sdk)
+
+        assert isinstance(decode_frame(captured[0]), ResetAck)
+
+    def test_cancel_calls_on_cancel_and_acks(self) -> None:
+        sdk = _make_sdk()
+        captured: list[bytes] = []
+        sdk._control_push.send_frame = lambda buf: captured.append(buf)
         calls: list[int] = []
 
-        def on_cancel() -> None:
-            calls.append(1)
+        sdk._handle_control(Cancel(), None, lambda: calls.append(1))
+        _close(sdk)
 
-        frame = Cancel()
-        response = sdk._handle_frame(frame, self._step_fn, None, on_cancel)
-        sdk._pull.close()
-        sdk._push.close()
-        assert isinstance(response, CancelAck)
         assert calls == [1]
+        assert isinstance(decode_frame(captured[0]), CancelAck)
 
-    def test_cancel_without_on_cancel_returns_cancel_ack(self) -> None:
-        sdk = self._sdk()
-        frame = Cancel()
-        response = sdk._handle_frame(frame, self._step_fn, None, None)
-        sdk._pull.close()
-        sdk._push.close()
-        assert isinstance(response, CancelAck)
+    def test_shutdown_returns_false_and_bye(self) -> None:
+        sdk = _make_sdk()
+        captured: list[bytes] = []
+        sdk._control_push.send_frame = lambda buf: captured.append(buf)
 
-    def test_shutdown_returns_none(self) -> None:
-        sdk = self._sdk()
-        frame = Shutdown()
-        response = sdk._handle_frame(frame, self._step_fn, None, None)
-        sdk._pull.close()
-        sdk._push.close()
-        assert response is None
+        keep_going = sdk._handle_control(Shutdown(), None, None)
+        _close(sdk)
 
-    def test_incoming_error_raises_protocol_error(self) -> None:
-        sdk = self._sdk()
-        frame = Error(code="some_error", msg="something went wrong")
-        with pytest.raises(ProtocolError, match="some_error"):
-            sdk._handle_frame(frame, self._step_fn, None, None)
-        sdk._pull.close()
-        sdk._push.close()
+        assert keep_going is False
+        from arena_planners.bridge.protocol import Bye
+        assert isinstance(decode_frame(captured[0]), Bye)
 
-    def test_unknown_op_returns_error_frame(self) -> None:
-        sdk = self._sdk()
-        frame = Action(t_sec=0, t_nanosec=0, seq=0, action_type="differential_drive", action=[0.0])
-        response = sdk._handle_frame(frame, self._step_fn, None, None)
-        sdk._pull.close()
-        sdk._push.close()
-        assert isinstance(response, Error)
-        assert response.code == "bad_op"
+    def test_fatal_error_raises(self) -> None:
+        sdk = _make_sdk()
+        with pytest.raises(ProtocolError, match="fatal"):
+            sdk._handle_control(Error(code="boom", msg="x", severity="fatal"), None, None)
+        _close(sdk)
+
+    def test_nonfatal_error_keeps_loop(self) -> None:
+        sdk = _make_sdk()
+        keep_going = sdk._handle_control(Error(code="boom", msg="x", severity="warn"), None, None)
+        _close(sdk)
+        assert keep_going is True

@@ -3,6 +3,8 @@
 from .base import Collector, DataSource, Generator
 from .collectors import (
     ArenaPedestrianCollector,
+    CompressedImageCollector,
+    ImageCollector,
     LaserScanCollector,
     OdometryCollector,
     PeopleCollector,
@@ -14,8 +16,10 @@ from .tf import RobotPoseTFGenerator
 __all__ = [
     "ArenaPedestrianCollector",
     "Collector",
+    "CompressedImageCollector",
     "DataSource",
     "Generator",
+    "ImageCollector",
     "LaserScanCollector",
     "OdometryCollector",
     "PeopleCollector",

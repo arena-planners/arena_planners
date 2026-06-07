@@ -1,7 +1,8 @@
-"""End-to-end tests for the DRL planner bridge. Uses real ZMQ, real subprocess, real frames.
+"""End-to-end tests for the DRL planner bridge. Real ZMQ, real subprocess, real frames.
 
-The test plays the edge-node role without rclpy: binds both sockets, spawns the toy
-planner subprocess, drives the full protocol cycle, and verifies wire semantics.
+The test plays the edge-node role without rclpy: binds all four sockets (data + control
+pairs), spawns the toy planner subprocess, drives the full protocol cycle, and verifies
+wire semantics.
 """
 
 from __future__ import annotations
@@ -39,15 +40,14 @@ _TIMEOUT_MS = 5_000
 _ARENA_PLANNERS_SRC = os.path.join(os.path.dirname(__file__), "..")
 
 
-def _planner_env(obs_ep: str, action_ep: str, extra: dict[str, str] | None = None) -> dict[str, str]:
+def _planner_env(eps: dict[str, str], extra: dict[str, str] | None = None) -> dict[str, str]:
     env = os.environ.copy()
     existing_pypath = env.get("PYTHONPATH", "")
     parts = [_ARENA_PLANNERS_SRC]
     if existing_pypath:
         parts.append(existing_pypath)
     env["PYTHONPATH"] = ":".join(parts)
-    env["ARENA_PLANNER_OBS_ENDPOINT"] = obs_ep
-    env["ARENA_PLANNER_ACTION_ENDPOINT"] = action_ep
+    env.update(eps)
     if extra:
         env.update(extra)
     return env
@@ -59,36 +59,38 @@ def _recv_with_timeout(pull: ZmqPullTransport) -> bytes:
     return pull.recv_frame()
 
 
-def _ipc_pair() -> tuple[str, str]:
+def _ipc_endpoints() -> dict[str, str]:
     uid = uuid.uuid4().hex
-    return (
-        f"ipc:///tmp/arena_e2e_obs_{uid}.sock",
-        f"ipc:///tmp/arena_e2e_act_{uid}.sock",
-    )
+    return {
+        "ARENA_PLANNER_OBS_ENDPOINT": f"ipc:///tmp/arena_e2e_obs_{uid}.sock",
+        "ARENA_PLANNER_ACTION_ENDPOINT": f"ipc:///tmp/arena_e2e_act_{uid}.sock",
+        "ARENA_PLANNER_CONTROL_ENDPOINT": f"ipc:///tmp/arena_e2e_ctrl_{uid}.sock",
+        "ARENA_PLANNER_CTRL_ACK_ENDPOINT": f"ipc:///tmp/arena_e2e_cack_{uid}.sock",
+    }
 
 
 @pytest.fixture()
 def bridge_pair():
-    obs_ep, action_ep = _ipc_pair()
-    push = ZmqPushTransport(obs_ep, mode="bind")
-    pull = ZmqPullTransport(action_ep, mode="bind")
+    eps = _ipc_endpoints()
+    data_push = ZmqPushTransport(eps["ARENA_PLANNER_OBS_ENDPOINT"], mode="bind")
+    data_pull = ZmqPullTransport(eps["ARENA_PLANNER_ACTION_ENDPOINT"], mode="bind")
+    control_push = ZmqPushTransport(eps["ARENA_PLANNER_CONTROL_ENDPOINT"], mode="bind", control=True)
+    control_pull = ZmqPullTransport(eps["ARENA_PLANNER_CTRL_ACK_ENDPOINT"], mode="bind", control=True)
     try:
-        yield push, pull, (obs_ep, action_ep)
+        yield data_push, data_pull, control_push, control_pull, eps
     finally:
-        push.close()
-        pull.close()
+        data_push.close()
+        data_pull.close()
+        control_push.close()
+        control_pull.close()
 
 
 @pytest.fixture()
 def toy_planner_proc(bridge_pair):
-    push, pull, (obs_ep, action_ep) = bridge_pair
-    env = _planner_env(obs_ep, action_ep)
-    proc = subprocess.Popen(
-        [sys.executable, _FIXTURE_PLANNER],
-        env=env,
-        start_new_session=True,
-    )
-    yield proc, push, pull
+    data_push, data_pull, control_push, control_pull, eps = bridge_pair
+    env = _planner_env(eps)
+    proc = subprocess.Popen([sys.executable, _FIXTURE_PLANNER], env=env, start_new_session=True)
+    yield proc, data_push, data_pull, control_push, control_pull
     if proc.poll() is None:
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
@@ -104,7 +106,7 @@ def toy_planner_proc(bridge_pair):
             proc.wait()
 
 
-def _do_handshake(push: ZmqPushTransport, pull: ZmqPullTransport) -> InitAck:
+def _do_handshake(control_push: ZmqPushTransport, control_pull: ZmqPullTransport) -> InitAck:
     init = Init(
         protocol_version=PROTOCOL_VERSION,
         schema_version=1,
@@ -113,49 +115,35 @@ def _do_handshake(push: ZmqPushTransport, pull: ZmqPullTransport) -> InitAck:
         planner_config={},
         run_id=uuid.uuid4().hex,
     )
-    push.send_frame(encode_frame(init))
-    buf = _recv_with_timeout(pull)
-    frame = decode_frame(buf)
+    control_push.send_frame(encode_frame(init))
+    frame = decode_frame(_recv_with_timeout(control_pull))
     assert isinstance(frame, InitAck), f"expected InitAck, got {frame!r}"
     return frame
 
 
 class TestInitHandshake:
     def test_init_handshake(self, toy_planner_proc):
-        _, push, pull = toy_planner_proc
-        ack = _do_handshake(push, pull)
+        _, _, _, cpush, cpull = toy_planner_proc
+        ack = _do_handshake(cpush, cpull)
         assert ack.capabilities.get("obs_policy") == "lossless"
         assert isinstance(ack.capabilities, dict)
 
     def test_protocol_version_echoed(self, toy_planner_proc):
-        _, push, pull = toy_planner_proc
-        init = Init(
-            protocol_version=PROTOCOL_VERSION,
-            schema_version=1,
-            obs_schema={},
-            action_schema={},
-            planner_config={},
-            run_id="test-run",
-        )
-        push.send_frame(encode_frame(init))
-        buf = _recv_with_timeout(pull)
-        frame = decode_frame(buf)
-        assert isinstance(frame, InitAck)
-        assert frame.capabilities.get("obs_policy") == "lossless"
+        _, _, _, cpush, cpull = toy_planner_proc
+        _do_handshake(cpush, cpull)
 
 
 class TestObsActionCycle:
     def test_obs_action_cycle(self, toy_planner_proc):
-        _, push, pull = toy_planner_proc
-        _do_handshake(push, pull)
+        _, dpush, dpull, cpush, cpull = toy_planner_proc
+        _do_handshake(cpush, cpull)
 
         for i in range(5):
             obs = Obs(t_sec=100 + i, t_nanosec=i * 1000, seq=i, features={"x": float(i)})
-            push.send_frame(encode_frame(obs))
-            buf = _recv_with_timeout(pull)
-            frame = decode_frame(buf)
+            dpush.send_frame(encode_frame(obs))
+            frame = decode_frame(_recv_with_timeout(dpull))
             assert isinstance(frame, Action), f"cycle {i}: expected Action, got {frame!r}"
-            assert frame.seq == i, f"seq mismatch at cycle {i}"
+            assert frame.seq == i
             assert frame.t_sec == 100 + i
             assert frame.t_nanosec == i * 1000
             assert frame.action_type == "differential_drive"
@@ -164,41 +152,52 @@ class TestObsActionCycle:
 
 class TestResetRoundTrip:
     def test_reset_round_trip(self, toy_planner_proc):
-        _, push, pull = toy_planner_proc
-        _do_handshake(push, pull)
+        _, dpush, dpull, cpush, cpull = toy_planner_proc
+        _do_handshake(cpush, cpull)
 
-        push.send_frame(encode_frame(Reset(episode_id="ep1", initial_state=None)))
-        buf = _recv_with_timeout(pull)
-        frame = decode_frame(buf)
+        cpush.send_frame(encode_frame(Reset(episode_id="ep1", initial_state=None)))
+        frame = decode_frame(_recv_with_timeout(cpull))
         assert isinstance(frame, ResetAck), f"expected ResetAck, got {frame!r}"
 
         obs = Obs(t_sec=200, t_nanosec=0, seq=0, features={})
-        push.send_frame(encode_frame(obs))
-        buf = _recv_with_timeout(pull)
-        frame = decode_frame(buf)
+        dpush.send_frame(encode_frame(obs))
+        frame = decode_frame(_recv_with_timeout(dpull))
         assert isinstance(frame, Action)
         assert frame.action == [0.1, 0.0]
 
 
+class TestResetSurvivesObsBacklog:
+    """Regression test: control channel delivers Reset even when data channel is flooded."""
+
+    def test_reset_arrives_through_obs_flood(self, toy_planner_proc):
+        _, dpush, dpull, cpush, cpull = toy_planner_proc
+        _do_handshake(cpush, cpull)
+
+        for i in range(50):
+            dpush.send_frame(encode_frame(Obs(t_sec=i, t_nanosec=0, seq=i, features={})))
+
+        cpush.send_frame(encode_frame(Reset(episode_id="flood")))
+        frame = decode_frame(_recv_with_timeout(cpull))
+        assert isinstance(frame, ResetAck)
+
+
 class TestCancelRoundTrip:
     def test_cancel_round_trip(self, toy_planner_proc):
-        _, push, pull = toy_planner_proc
-        _do_handshake(push, pull)
+        _, _, _, cpush, cpull = toy_planner_proc
+        _do_handshake(cpush, cpull)
 
-        push.send_frame(encode_frame(Cancel()))
-        buf = _recv_with_timeout(pull)
-        frame = decode_frame(buf)
+        cpush.send_frame(encode_frame(Cancel()))
+        frame = decode_frame(_recv_with_timeout(cpull))
         assert isinstance(frame, CancelAck), f"expected CancelAck, got {frame!r}"
 
 
 class TestShutdownClean:
     def test_shutdown_clean(self, toy_planner_proc):
-        proc, push, pull = toy_planner_proc
-        _do_handshake(push, pull)
+        proc, _, _, cpush, cpull = toy_planner_proc
+        _do_handshake(cpush, cpull)
 
-        push.send_frame(encode_frame(Shutdown()))
-        buf = _recv_with_timeout(pull)
-        frame = decode_frame(buf)
+        cpush.send_frame(encode_frame(Shutdown()))
+        frame = decode_frame(_recv_with_timeout(cpull))
         assert isinstance(frame, Bye), f"expected Bye, got {frame!r}"
 
         deadline = time.monotonic() + 2.0
@@ -212,14 +211,10 @@ class TestShutdownClean:
 class TestPlannerCrashPropagation:
     @pytest.fixture()
     def crashy_proc(self, bridge_pair):
-        push, pull, (obs_ep, action_ep) = bridge_pair
-        env = _planner_env(obs_ep, action_ep, extra={"TOY_PLANNER_CRASH_AFTER": "3"})
-        proc = subprocess.Popen(
-            [sys.executable, _FIXTURE_PLANNER],
-            env=env,
-            start_new_session=True,
-        )
-        yield proc, push, pull
+        data_push, data_pull, control_push, control_pull, eps = bridge_pair
+        env = _planner_env(eps, extra={"TOY_PLANNER_CRASH_AFTER": "3"})
+        proc = subprocess.Popen([sys.executable, _FIXTURE_PLANNER], env=env, start_new_session=True)
+        yield proc, data_push, data_pull, control_push, control_pull
         if proc.poll() is None:
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
@@ -235,22 +230,16 @@ class TestPlannerCrashPropagation:
                 proc.wait()
 
     def test_planner_crash_propagation(self, crashy_proc):
-        proc, push, pull = crashy_proc
-        _do_handshake(push, pull)
+        proc, dpush, dpull, cpush, cpull = crashy_proc
+        _do_handshake(cpush, cpull)
 
-        # First 3 obs cycle cleanly (crash_after=3 means crash on step > 3).
         for i in range(3):
-            obs = Obs(t_sec=i, t_nanosec=0, seq=i, features={})
-            push.send_frame(encode_frame(obs))
-            buf = _recv_with_timeout(pull)
-            frame = decode_frame(buf)
+            dpush.send_frame(encode_frame(Obs(t_sec=i, t_nanosec=0, seq=i, features={})))
+            frame = decode_frame(_recv_with_timeout(dpull))
             assert isinstance(frame, Action), f"cycle {i}: expected Action, got {frame!r}"
 
-        # 4th obs triggers the crash: planner sends Error then exits.
-        obs = Obs(t_sec=3, t_nanosec=0, seq=3, features={})
-        push.send_frame(encode_frame(obs))
-        buf = _recv_with_timeout(pull)
-        frame = decode_frame(buf)
+        dpush.send_frame(encode_frame(Obs(t_sec=3, t_nanosec=0, seq=3, features={})))
+        frame = decode_frame(_recv_with_timeout(dpull))
         assert isinstance(frame, Error), f"expected Error, got {frame!r}"
         assert frame.code == "step_failed"
 

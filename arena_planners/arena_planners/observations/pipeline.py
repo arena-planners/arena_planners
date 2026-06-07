@@ -20,6 +20,8 @@ from rclpy.qos import QoSProfile
 from .data_sources.base import Collector, DataSource, Generator
 from .data_sources.collectors import (
     ArenaPedestrianCollector,
+    CompressedImageCollector,
+    ImageCollector,
     LaserScanCollector,
     OdometryCollector,
     PathCollector,
@@ -31,6 +33,8 @@ from .data_sources.tf import RobotPoseTFGenerator
 
 _TYPE_REGISTRY: dict[str, Callable[..., DataSource]] = {
     "sensor_msgs/LaserScan": LaserScanCollector,
+    "sensor_msgs/Image": ImageCollector,
+    "sensor_msgs/CompressedImage": CompressedImageCollector,
     "nav_msgs/Odometry": OdometryCollector,
     "nav_msgs/Path": PathCollector,
     "geometry_msgs/PoseStamped": PoseStampedCollector,

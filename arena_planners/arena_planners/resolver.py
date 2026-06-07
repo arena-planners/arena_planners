@@ -329,6 +329,18 @@ def planner_dir(name: str, *, workspace_root: Path | None = None) -> Path:
     )
 
 
+def load_manifest(planner_name: str, *, workspace_root: Path | None = None) -> dict:
+    """Load and parse <planners>/<name>/planner.yaml. Returns the parsed dict.
+    Raises ResolverError if the planner is unknown (delegates to existing planner_dir()).
+    Raises FileNotFoundError if the directory exists but planner.yaml is missing.
+    """
+    import yaml  # noqa: PLC0415
+
+    manifest_path = planner_dir(planner_name, workspace_root=workspace_root) / "planner.yaml"
+    with open(manifest_path) as fh:
+        return yaml.safe_load(fh) or {}
+
+
 def installed_in_registry(name: str, *, workspace_root: Path | None = None) -> bool:
     """True if the planner's source is present (planner.py exists in the planners dir).
 
