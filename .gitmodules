@@ -10,3 +10,7 @@
 	path = planners/attngraph
 	url = https://github.com/arena-planners/attngraph.git
 	planner = attngraph
+[submodule "planners/kdma"]
+	path = planners/kdma
+	url = https://github.com/arena-planners/kdma.git
+	planner = kdma
