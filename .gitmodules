@@ -6,3 +6,7 @@
 	path = planners/crowdnav
 	url = https://github.com/arena-planners/crowdnav.git
 	planner = crowdnav
+[submodule "planners/attngraph"]
+	path = planners/attngraph
+	url = https://github.com/arena-planners/attngraph.git
+	planner = attngraph
