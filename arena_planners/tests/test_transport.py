@@ -92,8 +92,14 @@ def test_generate_transport_set_ipc_unique_across_calls():
     a = generate_transport_set("ipc")
     b = generate_transport_set("ipc")
     eps = {
-        a.obs.endpoint, a.action.endpoint, a.control.endpoint, a.ctrl_ack.endpoint,
-        b.obs.endpoint, b.action.endpoint, b.control.endpoint, b.ctrl_ack.endpoint,
+        a.obs.endpoint,
+        a.action.endpoint,
+        a.control.endpoint,
+        a.ctrl_ack.endpoint,
+        b.obs.endpoint,
+        b.action.endpoint,
+        b.control.endpoint,
+        b.ctrl_ack.endpoint,
     }
     assert len(eps) == 8
 

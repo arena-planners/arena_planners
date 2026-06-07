@@ -14,13 +14,6 @@ import threading
 import typing
 import uuid
 
-_PR_SET_PDEATHSIG = 1
-_libc = ctypes.CDLL("libc.so.6", use_errno=True)
-
-
-def _die_with_parent() -> None:
-    _libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
-
 import geometry_msgs.msg
 import numpy as np
 import rclpy.qos
@@ -58,6 +51,14 @@ from .transport import (
 
 if typing.TYPE_CHECKING:
     from arena_planners.observations.pipeline import Pipeline
+
+
+_PR_SET_PDEATHSIG = 1
+_libc = ctypes.CDLL("libc.so.6", use_errno=True)
+
+
+def _die_with_parent() -> None:
+    _libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
 
 
 class PlannerProcess:

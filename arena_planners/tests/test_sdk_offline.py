@@ -169,6 +169,7 @@ class TestHandleControl:
 
         assert keep_going is False
         from arena_planners.bridge.protocol import Bye
+
         assert isinstance(decode_frame(captured[0]), Bye)
 
     def test_fatal_error_raises(self) -> None:
