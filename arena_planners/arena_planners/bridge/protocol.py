@@ -9,7 +9,7 @@ import msgpack_numpy
 
 msgpack_numpy.patch()
 
-PROTOCOL_VERSION: int = 1
+PROTOCOL_VERSION: int = 2
 SCHEMA_VERSION: int = 1
 
 
@@ -52,6 +52,7 @@ class ResetAck:
     """Planner to edge: ready for observations."""
 
     op: str = dataclasses.field(default="reset_ack", init=False, repr=True)
+    applied_state: dict | None = None
 
 
 @dataclasses.dataclass(frozen=False, slots=True)
@@ -89,6 +90,7 @@ class CancelAck:
     """Planner to edge: cancel acknowledged."""
 
     op: str = dataclasses.field(default="cancel_ack", init=False, repr=True)
+    cancelled_seq: int | None = None
 
 
 @dataclasses.dataclass(frozen=False, slots=True)
@@ -112,9 +114,19 @@ class Error:
     op: str = dataclasses.field(default="error", init=False, repr=True)
     code: str = ""
     msg: str = ""
+    severity: str = "error"
 
 
-Frame = Init | InitAck | Reset | ResetAck | Obs | Action | Cancel | CancelAck | Shutdown | Bye | Error
+@dataclasses.dataclass(frozen=False, slots=True)
+class Heartbeat:
+    """Planner to edge: periodic liveness signal."""
+
+    op: str = dataclasses.field(default="heartbeat", init=False, repr=True)
+    seq: int = 0
+    monotonic_ns: int = 0
+
+
+Frame = Init | InitAck | Reset | ResetAck | Obs | Action | Cancel | CancelAck | Shutdown | Bye | Error | Heartbeat
 
 _OP_TO_CLASS: dict[str, type] = {
     "init": Init,
@@ -128,6 +140,7 @@ _OP_TO_CLASS: dict[str, type] = {
     "shutdown": Shutdown,
     "bye": Bye,
     "error": Error,
+    "heartbeat": Heartbeat,
 }
 
 _SLOTS: dict[type, frozenset[str]] = {

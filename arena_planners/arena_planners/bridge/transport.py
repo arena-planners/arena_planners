@@ -15,6 +15,8 @@ OBS_POLICY_LATEST_ONLY = "latest_only"
 
 ObsPolicy = typing.Literal["lossless", "latest_only"]
 
+_CONTROL_HWM = 16
+
 
 class Transport(typing.Protocol):
     """One directional framed pipe (send or recv side)."""
@@ -37,41 +39,36 @@ class TransportEndpoint:
 
 
 @dataclass(frozen=True)
-class TransportPair:
-    """Bidirectional pair: one pipe for obs, one for actions."""
+class TransportSet:
+    """Four endpoints: data (obs/action) carry tick-rate traffic, control (ctrl/ctrl_ack)
+    carry session frames. Control channel is always lossless; data channel honours
+    obs_policy."""
 
     obs: TransportEndpoint
     action: TransportEndpoint
+    control: TransportEndpoint
+    ctrl_ack: TransportEndpoint
 
 
-def generate_pair(
-    kind: typing.Literal["ipc", "tcp"] | None = None,
-) -> TransportPair:
-    """Return a fresh TransportPair with unique endpoints.
+def _fresh_endpoint(kind: typing.Literal["ipc", "tcp"]) -> TransportEndpoint:
+    if kind == "ipc":
+        return TransportEndpoint(endpoint=f"ipc:///tmp/arena_planner_{uuid.uuid4().hex}.sock", kind="ipc")
+    return TransportEndpoint(endpoint="tcp://127.0.0.1:0", kind="tcp")
 
-    Defaults to ipc on Linux/macOS, tcp on Windows.
-    For tcp, returns port 0; the actual port is assigned at bind time.
-    """
+
+def generate_transport_set(kind: typing.Literal["ipc", "tcp"] | None = None) -> TransportSet:
+    """Fresh four-endpoint set. Defaults to ipc on Linux/macOS, tcp on Windows."""
     if kind is None:
         kind = "tcp" if platform.system() == "Windows" else "ipc"
-
-    if kind == "ipc":
-        obs_ep = f"ipc:///tmp/arena_planner_{uuid.uuid4().hex}.sock"
-        action_ep = f"ipc:///tmp/arena_planner_{uuid.uuid4().hex}.sock"
-        return TransportPair(
-            obs=TransportEndpoint(endpoint=obs_ep, kind="ipc"),
-            action=TransportEndpoint(endpoint=action_ep, kind="ipc"),
-        )
-
-    obs_ep = "tcp://127.0.0.1:0"
-    action_ep = "tcp://127.0.0.1:0"
-    return TransportPair(
-        obs=TransportEndpoint(endpoint=obs_ep, kind="tcp"),
-        action=TransportEndpoint(endpoint=action_ep, kind="tcp"),
+    return TransportSet(
+        obs=_fresh_endpoint(kind),
+        action=_fresh_endpoint(kind),
+        control=_fresh_endpoint(kind),
+        ctrl_ack=_fresh_endpoint(kind),
     )
 
 
-def _apply_obs_policy(sock: zmq.Socket, obs_policy: ObsPolicy) -> None:
+def _apply_data_policy(sock: zmq.Socket, obs_policy: ObsPolicy) -> None:
     if obs_policy == OBS_POLICY_LATEST_ONLY:
         sock.set(zmq.SNDHWM, 1)
         sock.set(zmq.RCVHWM, 1)
@@ -81,11 +78,16 @@ def _apply_obs_policy(sock: zmq.Socket, obs_policy: ObsPolicy) -> None:
         sock.set(zmq.RCVHWM, 1024)
 
 
+def _apply_control_policy(sock: zmq.Socket) -> None:
+    sock.set(zmq.SNDHWM, _CONTROL_HWM)
+    sock.set(zmq.RCVHWM, _CONTROL_HWM)
+
+
 class ZmqPushTransport:
     """PUSH socket, bind or connect role selectable per instance.
 
-    Default mode="bind" matches original edge-node usage (obs pipe going to planner).
-    mode="connect" is used by the planner side (sdk.py) where the edge already bound.
+    `obs_policy` toggles data-channel CONFLATE; `control=True` overrides to
+    always-lossless control semantics regardless of obs_policy.
     """
 
     def __init__(
@@ -94,13 +96,17 @@ class ZmqPushTransport:
         obs_policy: ObsPolicy = OBS_POLICY_LOSSLESS,
         *,
         mode: typing.Literal["bind", "connect"] = "bind",
+        control: bool = False,
         ctx: zmq.Context | None = None,
     ) -> None:
         self._ctx = ctx or zmq.Context.instance()
         self._owned_ctx = ctx is None
         self._mode = mode
         self._sock: zmq.Socket = self._ctx.socket(zmq.PUSH)
-        _apply_obs_policy(self._sock, obs_policy)
+        if control:
+            _apply_control_policy(self._sock)
+        else:
+            _apply_data_policy(self._sock, obs_policy)
         if mode == "bind":
             self._sock.bind(endpoint)
             self._bound_endpoint: str | None = self._sock.getsockopt_string(zmq.LAST_ENDPOINT)
@@ -114,6 +120,11 @@ class ZmqPushTransport:
         if self._bound_endpoint is None:
             raise RuntimeError("bound_endpoint is not available when mode='connect'")
         return self._bound_endpoint
+
+    @property
+    def sock(self) -> zmq.Socket:
+        """Underlying socket, for use with zmq.Poller."""
+        return self._sock
 
     def send_frame(self, buf: bytes) -> None:
         self._sock.send(buf)
@@ -135,11 +146,7 @@ class ZmqPushTransport:
 
 
 class ZmqPullTransport:
-    """PULL socket, bind or connect role selectable per instance.
-
-    Default mode="connect" matches original edge-node usage (action pipe from planner).
-    mode="bind" is used when the pull side needs to be the stable anchor point.
-    """
+    """PULL socket, bind or connect role selectable per instance."""
 
     def __init__(
         self,
@@ -147,13 +154,17 @@ class ZmqPullTransport:
         obs_policy: ObsPolicy = OBS_POLICY_LOSSLESS,
         *,
         mode: typing.Literal["bind", "connect"] = "connect",
+        control: bool = False,
         ctx: zmq.Context | None = None,
     ) -> None:
         self._ctx = ctx or zmq.Context.instance()
         self._owned_ctx = ctx is None
         self._mode = mode
         self._sock: zmq.Socket = self._ctx.socket(zmq.PULL)
-        _apply_obs_policy(self._sock, obs_policy)
+        if control:
+            _apply_control_policy(self._sock)
+        else:
+            _apply_data_policy(self._sock, obs_policy)
         if mode == "bind":
             self._sock.bind(endpoint)
             self._bound_endpoint: str | None = self._sock.getsockopt_string(zmq.LAST_ENDPOINT)
@@ -163,10 +174,13 @@ class ZmqPullTransport:
 
     @property
     def bound_endpoint(self) -> str:
-        """Actual endpoint after bind (resolves port 0 on tcp). Raises if mode='connect'."""
         if self._bound_endpoint is None:
             raise RuntimeError("bound_endpoint is not available when mode='connect'")
         return self._bound_endpoint
+
+    @property
+    def sock(self) -> zmq.Socket:
+        return self._sock
 
     def send_frame(self, buf: bytes) -> None:
         raise NotImplementedError("PULL socket cannot send")
@@ -187,22 +201,28 @@ class ZmqPullTransport:
         self.close()
 
 
-def endpoints_from_env() -> tuple[str, str]:
-    """Read obs and action endpoints from env vars.
+_ENV_VARS = (
+    "ARENA_PLANNER_OBS_ENDPOINT",
+    "ARENA_PLANNER_ACTION_ENDPOINT",
+    "ARENA_PLANNER_CONTROL_ENDPOINT",
+    "ARENA_PLANNER_CTRL_ACK_ENDPOINT",
+)
 
-    Returns (obs_endpoint, action_endpoint).
-    Raises RuntimeError if either var is missing.
-    """
-    obs = os.environ.get("ARENA_PLANNER_OBS_ENDPOINT")
-    action = os.environ.get("ARENA_PLANNER_ACTION_ENDPOINT")
-    missing = [
-        name
-        for name, val in (
-            ("ARENA_PLANNER_OBS_ENDPOINT", obs),
-            ("ARENA_PLANNER_ACTION_ENDPOINT", action),
-        )
-        if val is None
-    ]
+
+def endpoints_from_env() -> tuple[str, str, str, str]:
+    """Read all four endpoints (obs, action, control, ctrl_ack) from env vars."""
+    values = tuple(os.environ.get(name) for name in _ENV_VARS)
+    missing = [name for name, val in zip(_ENV_VARS, values, strict=True) if val is None]
     if missing:
         raise RuntimeError(f"Missing required environment variable(s): {', '.join(missing)}")
-    return typing.cast(str, obs), typing.cast(str, action)
+    return typing.cast(tuple[str, str, str, str], values)
+
+
+def env_from_endpoints(transport_set: TransportSet) -> dict[str, str]:
+    """Build the env-var dict to inject into a planner subprocess."""
+    return {
+        "ARENA_PLANNER_OBS_ENDPOINT": transport_set.obs.endpoint,
+        "ARENA_PLANNER_ACTION_ENDPOINT": transport_set.action.endpoint,
+        "ARENA_PLANNER_CONTROL_ENDPOINT": transport_set.control.endpoint,
+        "ARENA_PLANNER_CTRL_ACK_ENDPOINT": transport_set.ctrl_ack.endpoint,
+    }

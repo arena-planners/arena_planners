@@ -9,12 +9,11 @@ import time
 import pytest
 
 from arena_planners.bridge.edge_node import PlannerProcess
-from arena_planners.bridge.transport import generate_pair
+from arena_planners.bridge.transport import generate_transport_set
 
 
 def _make_process(command: list[str]) -> PlannerProcess:
-    endpoints = generate_pair("ipc")
-    return PlannerProcess(command=command, endpoints=endpoints)
+    return PlannerProcess(command=command, endpoints=generate_transport_set("ipc"))
 
 
 def _sleep_command(seconds: float = 30.0) -> list[str]:
@@ -127,10 +126,9 @@ def test_nonzero_exit_code_surfaces():
 def test_extra_env_forwarded():
     sentinel = "ARENA_PLANNER_TEST_SENTINEL"
     check_script = f"import os, sys; sys.exit(0 if os.environ.get('{sentinel}') == '1' else 1)"
-    endpoints = generate_pair("ipc")
     proc = PlannerProcess(
         command=[sys.executable, "-c", check_script],
-        endpoints=endpoints,
+        endpoints=generate_transport_set("ipc"),
         extra_env={sentinel: "1"},
     )
     proc.start()
@@ -147,6 +145,8 @@ def test_endpoint_env_vars_forwarded():
         "import os, sys; "
         "assert os.environ.get('ARENA_PLANNER_OBS_ENDPOINT'), 'obs missing'; "
         "assert os.environ.get('ARENA_PLANNER_ACTION_ENDPOINT'), 'action missing'; "
+        "assert os.environ.get('ARENA_PLANNER_CONTROL_ENDPOINT'), 'control missing'; "
+        "assert os.environ.get('ARENA_PLANNER_CTRL_ACK_ENDPOINT'), 'ctrl_ack missing'; "
         "sys.exit(0)"
     )
     proc = _make_process([sys.executable, "-c", check_script])
