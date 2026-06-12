@@ -23,6 +23,7 @@ from arena_planners.bridge.protocol import (
     Cancel,
     CancelAck,
     Error,
+    Heartbeat,
     Init,
     InitAck,
     Obs,
@@ -57,6 +58,14 @@ def _recv_with_timeout(pull: ZmqPullTransport) -> bytes:
     if not pull.poll(_TIMEOUT_MS):
         pytest.fail("timed out waiting for frame from planner")
     return pull.recv_frame()
+
+
+def _recv_control(pull: ZmqPullTransport):
+    """Next non-heartbeat control frame, heartbeats interleave freely (mirrors edge_node)."""
+    while True:
+        frame = decode_frame(_recv_with_timeout(pull))
+        if not isinstance(frame, Heartbeat):
+            return frame
 
 
 def _ipc_endpoints() -> dict[str, str]:
@@ -116,7 +125,7 @@ def _do_handshake(control_push: ZmqPushTransport, control_pull: ZmqPullTransport
         run_id=uuid.uuid4().hex,
     )
     control_push.send_frame(encode_frame(init))
-    frame = decode_frame(_recv_with_timeout(control_pull))
+    frame = _recv_control(control_pull)
     assert isinstance(frame, InitAck), f"expected InitAck, got {frame!r}"
     return frame
 
@@ -156,7 +165,7 @@ class TestResetRoundTrip:
         _do_handshake(cpush, cpull)
 
         cpush.send_frame(encode_frame(Reset(episode_id="ep1", initial_state=None)))
-        frame = decode_frame(_recv_with_timeout(cpull))
+        frame = _recv_control(cpull)
         assert isinstance(frame, ResetAck), f"expected ResetAck, got {frame!r}"
 
         obs = Obs(t_sec=200, t_nanosec=0, seq=0, features={})
@@ -177,7 +186,7 @@ class TestResetSurvivesObsBacklog:
             dpush.send_frame(encode_frame(Obs(t_sec=i, t_nanosec=0, seq=i, features={})))
 
         cpush.send_frame(encode_frame(Reset(episode_id="flood")))
-        frame = decode_frame(_recv_with_timeout(cpull))
+        frame = _recv_control(cpull)
         assert isinstance(frame, ResetAck)
 
 
@@ -187,7 +196,7 @@ class TestCancelRoundTrip:
         _do_handshake(cpush, cpull)
 
         cpush.send_frame(encode_frame(Cancel()))
-        frame = decode_frame(_recv_with_timeout(cpull))
+        frame = _recv_control(cpull)
         assert isinstance(frame, CancelAck), f"expected CancelAck, got {frame!r}"
 
 
@@ -197,7 +206,7 @@ class TestShutdownClean:
         _do_handshake(cpush, cpull)
 
         cpush.send_frame(encode_frame(Shutdown()))
-        frame = decode_frame(_recv_with_timeout(cpull))
+        frame = _recv_control(cpull)
         assert isinstance(frame, Bye), f"expected Bye, got {frame!r}"
 
         deadline = time.monotonic() + 2.0
