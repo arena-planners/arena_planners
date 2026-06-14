@@ -39,6 +39,7 @@ class Collector(Generic[RosMessageType, ProcessedDataType], DataSource):  # noqa
     timeout: float = 0.1
     fallback_value: ProcessedDataType | None = None
     up_to_date_required: bool = False
+    simulation_scoped: bool = False  # resolve topic at the simulation namespace, not the robot one
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

@@ -147,6 +147,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         source_frame: str = "",
         target_frame: str = "map",
         is_holonomic: bool = False,
+        simulation_namespace: str = "",
         **kwargs: object,
     ) -> None:
         super().__init__(node_name, namespace=namespace, use_global_arguments=False, **kwargs)
@@ -156,6 +157,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._source_frame = source_frame
         self._target_frame = target_frame
         self._is_holonomic = bool(is_holonomic)
+        self._simulation_namespace = simulation_namespace
 
         self._obs_manager: Pipeline | None = None
         self._proc: PlannerProcess | None = None
@@ -209,6 +211,7 @@ class PlannerEdgeNode(ArenaMixinNode):
             ns=ns,
             source_frame=self._source_frame,
             target_frame=self._target_frame,
+            simulation_ns=self._simulation_namespace,
         )
 
         self._proc = PlannerProcess(self._planner_command, endpoints)

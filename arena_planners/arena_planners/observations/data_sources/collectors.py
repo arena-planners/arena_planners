@@ -162,6 +162,8 @@ class PeopleCollector(Collector[people_msgs.People, PedestrianDetections]):
 class ArenaPedestrianCollector(Collector[arena_people_msgs.Pedestrians, ArenaPedestrianDetections]):
     """Flattens arena_people_msgs/Pedestrians to (N, 5) ndarray: [id, x, y, vx, vy]."""
 
+    simulation_scoped = True  # arena_peds is published at the env (simulation) namespace, not the robot's
+
     def _preprocess(self, msg: arena_people_msgs.Pedestrians) -> ArenaPedestrianDetections:
         if not msg.pedestrians:
             return np.empty((0, 5), dtype=np.float32)

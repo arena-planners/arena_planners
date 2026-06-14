@@ -46,9 +46,12 @@ _TYPE_REGISTRY: dict[str, Callable[..., DataSource]] = {
 
 
 class Pipeline:
-    def __init__(self, node: Node, ns: str | Namespace = "") -> None:
+    def __init__(self, node: Node, ns: str | Namespace = "", simulation_ns: str | Namespace = "") -> None:
         self._node = node
         self._ns = Namespace(ns)
+        # Env-level topics (arena_peds) resolve at the simulation namespace, which the edge node's
+        # own namespace nests too deep to derive by dirname, so the caller passes it explicitly.
+        self._sim_ns = Namespace(simulation_ns) if simulation_ns else self._ns.simulation_ns
         self._collectors: dict[str, Collector] = {}
         self._generators: dict[str, Generator] = {}
         self._sub_handles: list = []
@@ -56,7 +59,8 @@ class Pipeline:
     def add(self, name: str, source: DataSource, qos: QoSProfile | int | None = None) -> None:
         if isinstance(source, Collector):
             self._collectors[name] = source
-            topic = source.topic if source.topic.startswith("/") or not self._ns else str(self._ns(source.topic))
+            base_ns = self._sim_ns if source.simulation_scoped else self._ns
+            topic = source.topic if source.topic.startswith("/") or not self._ns else str(base_ns(source.topic))
             qos_value = qos if qos is not None else 10
             self._sub_handles.append(
                 self._node.create_subscription(source.message_type, topic, source.update, qos_value)
@@ -93,6 +97,7 @@ class Pipeline:
         ns: str | Namespace = "",
         source_frame: str = "",
         target_frame: str = "map",
+        simulation_ns: str | Namespace = "",
     ) -> Pipeline:
         """Build a pipeline from a YAML-shaped dict.
 
@@ -105,7 +110,7 @@ class Pipeline:
                   topic: <topic_name>  # for collectors
                   ...                   # generator-specific kwargs
         """
-        p = cls(node, ns=ns)
+        p = cls(node, ns=ns, simulation_ns=simulation_ns)
         aliases = config.get("aliases", {}) or {}
 
         for name, ds_config in (config.get("datasources") or {}).items():
