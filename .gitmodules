@@ -2,31 +2,47 @@
 	path = planners/drlvo
 	url = https://github.com/arena-planners/drlvo.git
 	planner = drlvo
+	branch = jazzy
+	update = rebase
 [submodule "planners/crowdnav"]
 	path = planners/crowdnav
 	url = https://github.com/arena-planners/crowdnav.git
 	planner = crowdnav
+	branch = jazzy
+	update = rebase
 [submodule "planners/attngraph"]
 	path = planners/attngraph
 	url = https://github.com/arena-planners/attngraph.git
 	planner = attngraph
+	branch = jazzy
+	update = rebase
 [submodule "planners/kdma"]
 	path = planners/kdma
 	url = https://github.com/arena-planners/kdma.git
 	planner = kdma
+	branch = jazzy
+	update = rebase
 [submodule "planners/rlrvo"]
 	path = planners/rlrvo
 	url = https://github.com/arena-planners/rlrvo.git
 	planner = rlrvo
+	branch = jazzy
+	update = rebase
 [submodule "planners/height"]
 	path = planners/height
 	url = https://github.com/arena-planners/height.git
 	planner = height
+	branch = jazzy
+	update = rebase
 [submodule "planners/scope"]
 	path = planners/scope
 	url = https://github.com/arena-planners/scope.git
 	planner = scope
+	branch = jazzy
+	update = rebase
 [submodule "planners/sicnav"]
 	path = planners/sicnav
 	url = https://github.com/arena-planners/sicnav.git
 	planner = sicnav
+	branch = jazzy
+	update = rebase
