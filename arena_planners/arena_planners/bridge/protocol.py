@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import typing
 
 import msgpack
 import msgpack_numpy
@@ -17,7 +18,7 @@ class ProtocolError(Exception):
     """Raised on unknown op or malformed payload."""
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class Init:
     """Edge to planner: open the session."""
 
@@ -30,7 +31,7 @@ class Init:
     run_id: str = ""
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class InitAck:
     """Planner to edge: session accepted."""
 
@@ -38,7 +39,7 @@ class InitAck:
     capabilities: dict = dataclasses.field(default_factory=dict)
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class Reset:
     """Edge to planner: begin a new episode."""
 
@@ -47,7 +48,7 @@ class Reset:
     initial_state: dict | None = None
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class ResetAck:
     """Planner to edge: ready for observations."""
 
@@ -55,7 +56,7 @@ class ResetAck:
     applied_state: dict | None = None
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class Obs:
     """Edge to planner: one observation tick."""
 
@@ -66,7 +67,7 @@ class Obs:
     features: dict = dataclasses.field(default_factory=dict)
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class Action:
     """Planner to edge: velocity command for the current tick."""
 
@@ -78,14 +79,14 @@ class Action:
     action: list[float] = dataclasses.field(default_factory=list)
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class Cancel:
     """Edge to planner: preempt the current goal."""
 
     op: str = dataclasses.field(default="cancel", init=False, repr=True)
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class CancelAck:
     """Planner to edge: cancel acknowledged."""
 
@@ -93,21 +94,21 @@ class CancelAck:
     cancelled_seq: int | None = None
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class Shutdown:
     """Edge to planner: terminate cleanly."""
 
     op: str = dataclasses.field(default="shutdown", init=False, repr=True)
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class Bye:
     """Planner to edge: goodbye before exit."""
 
     op: str = dataclasses.field(default="bye", init=False, repr=True)
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class Error:
     """Either direction: structured error."""
 
@@ -117,7 +118,7 @@ class Error:
     severity: str = "error"
 
 
-@dataclasses.dataclass(frozen=False, slots=True)
+@dataclasses.dataclass(frozen=False)
 class Heartbeat:
     """Planner to edge: periodic liveness signal."""
 
@@ -126,7 +127,20 @@ class Heartbeat:
     monotonic_ns: int = 0
 
 
-Frame = Init | InitAck | Reset | ResetAck | Obs | Action | Cancel | CancelAck | Shutdown | Bye | Error | Heartbeat
+Frame = typing.Union[  # noqa: UP007 - runtime alias, must import on Python < 3.10
+    Init,
+    InitAck,
+    Reset,
+    ResetAck,
+    Obs,
+    Action,
+    Cancel,
+    CancelAck,
+    Shutdown,
+    Bye,
+    Error,
+    Heartbeat,
+]
 
 _OP_TO_CLASS: dict[str, type] = {
     "init": Init,

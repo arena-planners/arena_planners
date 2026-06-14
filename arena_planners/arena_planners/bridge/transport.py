@@ -212,10 +212,11 @@ _ENV_VARS = (
 def endpoints_from_env() -> tuple[str, str, str, str]:
     """Read all four endpoints (obs, action, control, ctrl_ack) from env vars."""
     values = tuple(os.environ.get(name) for name in _ENV_VARS)
-    missing = [name for name, val in zip(_ENV_VARS, values, strict=True) if val is None]
+    missing = [name for index, name in enumerate(_ENV_VARS) if values[index] is None]
     if missing:
         raise RuntimeError(f"Missing required environment variable(s): {', '.join(missing)}")
-    return typing.cast(tuple[str, str, str, str], values)
+    obs, action, control, ctrl_ack = values
+    return obs, action, control, ctrl_ack
 
 
 def env_from_endpoints(transport_set: TransportSet) -> dict[str, str]:
