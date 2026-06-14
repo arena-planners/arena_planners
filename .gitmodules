@@ -26,3 +26,7 @@
 	path = planners/scope
 	url = https://github.com/arena-planners/scope.git
 	planner = scope
+[submodule "planners/sicnav"]
+	path = planners/sicnav
+	url = https://github.com/arena-planners/sicnav.git
+	planner = sicnav
