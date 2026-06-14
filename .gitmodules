@@ -18,3 +18,7 @@
 	path = planners/rlrvo
 	url = https://github.com/arena-planners/rlrvo.git
 	planner = rlrvo
+[submodule "planners/height"]
+	path = planners/height
+	url = https://github.com/arena-planners/height.git
+	planner = height
