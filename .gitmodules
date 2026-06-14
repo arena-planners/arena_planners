@@ -22,3 +22,7 @@
 	path = planners/height
 	url = https://github.com/arena-planners/height.git
 	planner = height
+[submodule "planners/scope"]
+	path = planners/scope
+	url = https://github.com/arena-planners/scope.git
+	planner = scope
