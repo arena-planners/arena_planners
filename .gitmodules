@@ -46,3 +46,10 @@
 	planner = sicnav
 	branch = jazzy
 	update = rebase
+[submodule "planners/hateb"]
+	path = planners/hateb
+	url = https://github.com/arena-planners/hateb.git
+	branch = jazzy
+	planner = hateb
+	kind = nav2
+	update = rebase

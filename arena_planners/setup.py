@@ -14,6 +14,8 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "cohan_peds_bridge = arena_planners.cohan_peds_bridge:main",
+        ],
     },
 )

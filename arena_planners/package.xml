@@ -13,6 +13,8 @@
   <exec_depend>people_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
+  <exec_depend>cohan_msgs</exec_depend>
   <exec_depend>python3-zmq</exec_depend>
   <exec_depend>python3-msgpack</exec_depend>
   <exec_depend>python3-msgpack-numpy</exec_depend>
