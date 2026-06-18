@@ -303,6 +303,11 @@ def _nav2_match(name: str) -> Nav2Plugin | None:
     return None
 
 
+def planners_root(workspace_root: Path | None = None) -> Path:
+    """Return the planners directory (`<workspace>/arena_planners/planners`)."""
+    return _find_workspace_root(workspace_root) / _ARENA_PLANNERS_SUBDIR
+
+
 def planner_dir(name: str, *, workspace_root: Path | None = None) -> Path:
     """Return the directory for a registered planner (submodule or local working-tree).
 
