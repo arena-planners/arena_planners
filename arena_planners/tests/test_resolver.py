@@ -21,27 +21,27 @@ def _has_ament_index() -> bool:
 
 
 _GITMODULES = """\
-[submodule "arena_planners/planners/drlvo"]
-\tpath = arena_planners/planners/drlvo
+[submodule "planners/drlvo"]
+\tpath = planners/drlvo
 \turl = https://example.com/drlvo.git
 \tplanner = drlvo
 """
 
 _GITMODULES_WITH_UNCLONED = """\
-[submodule "arena_planners/planners/drlvo"]
-\tpath = arena_planners/planners/drlvo
+[submodule "planners/drlvo"]
+\tpath = planners/drlvo
 \turl = https://example.com/drlvo.git
 \tplanner = drlvo
-[submodule "arena_planners/planners/ghost_planner"]
-\tpath = arena_planners/planners/ghost_planner
+[submodule "planners/ghost_planner"]
+\tpath = planners/ghost_planner
 \turl = https://example.com/ghost_planner.git
 \tplanner = ghost_planner
 """
 
 
 def _make_workspace(tmp_path, *, install_drlvo: bool = True) -> None:
-    (tmp_path / ".gitmodules").write_text(_GITMODULES)
     (tmp_path / "arena_planners").mkdir(parents=True)
+    (tmp_path / "arena_planners" / ".gitmodules").write_text(_GITMODULES)
     submod = tmp_path / "arena_planners" / "planners" / "drlvo"
     submod.mkdir(parents=True)
     if install_drlvo:
@@ -182,8 +182,8 @@ def test_local_only_planner_listed_and_resolvable(tmp_path):
 
 def test_submodule_without_planner_py_listed_but_raises_on_resolve(tmp_path):
     """A .gitmodules entry without planner.py on disk is listed but raises ResolverError."""
-    (tmp_path / ".gitmodules").write_text(_GITMODULES_WITH_UNCLONED)
     (tmp_path / "arena_planners" / "planners" / "drlvo").mkdir(parents=True)
+    (tmp_path / "arena_planners" / ".gitmodules").write_text(_GITMODULES_WITH_UNCLONED)
     (tmp_path / "arena_planners" / "planners" / "drlvo" / "planner.py").write_text("")
     (tmp_path / "arena_training" / "agents").mkdir(parents=True)
     available = list_available(workspace_root=tmp_path)

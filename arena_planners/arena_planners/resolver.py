@@ -5,13 +5,14 @@ Priority: registry -> rosnav_rl -> nav2. First match wins; warn on collision.
 
 from __future__ import annotations
 
-import configparser
 import os
 import sys
 import typing
 import warnings
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from arena_planners import registry
 
 try:
     from ament_index_python.packages import get_packages_with_prefixes as _get_packages_with_prefixes
@@ -113,63 +114,14 @@ def _find_workspace_root(hint: Path | None) -> Path:
     raise ResolverError("cannot locate workspace root; set workspace_root= or run inside an Arena checkout")
 
 
-def _directory_scan(workspace_root: Path) -> list[str]:
-    """Return planner names discovered by presence of planner.py in the planners subdir."""
-    planners_root = workspace_root / _ARENA_PLANNERS_SUBDIR
-    if not planners_root.is_dir():
-        return []
-    names: list[str] = []
-    for entry in sorted(planners_root.iterdir()):
-        if not entry.is_dir():
-            continue
-        if entry.name.startswith("."):
-            continue
-        if entry.name.endswith("_wrap"):
-            continue
-        if (entry / "planner.py").is_file():
-            names.append(entry.name)
-    return names
-
-
-def _gitmodules_names(workspace_root: Path) -> list[str]:
-    """Return planner names from .gitmodules `planner = <name>` entries."""
-    cfg = configparser.ConfigParser()
-    cfg.read(workspace_root / ".gitmodules")
-    names: list[str] = []
-    for section in cfg.sections():
-        if not section.startswith("submodule "):
-            continue
-        for name in cfg[section].get("planner", "").split():
-            if name and name not in names:
-                names.append(name)
-    return names
-
-
 def _registry_names(workspace_root: Path) -> list[str]:
-    """Return union of .gitmodules planner names and directory-scan names, de-duped, sorted."""
-    seen: set[str] = set()
-    names: list[str] = []
-    for name in _gitmodules_names(workspace_root) + _directory_scan(workspace_root):
-        if name not in seen:
-            seen.add(name)
-            names.append(name)
-    return names
+    """Planner names from the registry SSOT: submodules unioned with local dirs."""
+    return registry.all_planners(workspace_root)
 
 
 def _registry_paths(workspace_root: Path) -> dict[str, list[str]]:
-    cfg = configparser.ConfigParser()
-    cfg.read(workspace_root / ".gitmodules")
-    out: dict[str, list[str]] = {}
-    for section in cfg.sections():
-        if not section.startswith("submodule "):
-            continue
-        path = cfg[section].get("path", "").strip()
-        if not path:
-            continue
-        for name in cfg[section].get("planner", "").split():
-            if name:
-                out.setdefault(name, []).append(path)
-    return out
+    """Planner name -> submodule paths (relative to root), from the registry SSOT."""
+    return registry.submodule_paths(workspace_root)
 
 
 def _rosnav_rl_names(workspace_root: Path) -> list[str]:
