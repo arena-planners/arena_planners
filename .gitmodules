@@ -65,3 +65,6 @@
 [submodule "planners/dsrnn"]
 	path = planners/dsrnn
 	url = https://github.com/arena-planners/dsrnn.git
+[submodule "planners/gensafenav"]
+	path = planners/gensafenav
+	url = https://github.com/arena-planners/gensafenav.git
