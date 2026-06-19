@@ -62,3 +62,6 @@
 [submodule "planners/crowdsurfer"]
 	path = planners/crowdsurfer
 	url = https://github.com/arena-planners/crowdsurfer.git
+[submodule "planners/dsrnn"]
+	path = planners/dsrnn
+	url = https://github.com/arena-planners/dsrnn.git
