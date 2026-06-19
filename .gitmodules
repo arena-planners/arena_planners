@@ -56,3 +56,6 @@
 [submodule "planners/cadrl"]
 	path = planners/cadrl
 	url = https://github.com/arena-planners/cadrl.git
+[submodule "planners/cd-sarl"]
+	path = planners/cd-sarl
+	url = https://github.com/arena-planners/cd-sarl.git
