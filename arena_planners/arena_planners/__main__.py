@@ -13,13 +13,15 @@ def cmd_ls(args: argparse.Namespace) -> int:
     root = registry.workspace_root()
     paths = registry.submodule_paths(root)
     status = registry.submodule_status(root)
+    kinds = registry.kinds(root)
     local = set(registry.local_planners(root))
     for name in registry.all_planners(root):
         if name in local:
             print(f"[x] {name} (local)")
             continue
         pending = any(status.get(p) == "uninit" for p in paths[name])
-        print(f"{'[ ]' if pending else '[x]'} {name}")
+        suffix = " (nav2)" if kinds.get(name) == "nav2" else ""
+        print(f"{'[ ]' if pending else '[x]'} {name}{suffix}")
     return 0
 
 

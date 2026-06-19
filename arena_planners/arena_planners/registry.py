@@ -33,6 +33,20 @@ def submodule_paths(root: Path) -> dict[str, list[str]]:
     return out
 
 
+def kinds(root: Path) -> dict[str, str]:
+    """Planner name -> kind ('nav2', 'bridge', ...) from .gitmodules `kind=` tags, default 'bridge'."""
+    cfg = configparser.ConfigParser()
+    cfg.read(root / _SDK / ".gitmodules")
+    out: dict[str, str] = {}
+    for section in cfg.sections():
+        if not section.startswith("submodule "):
+            continue
+        kind = cfg[section].get("kind", "bridge").strip()
+        for name in cfg[section].get("planner", "").split():
+            out[name] = kind
+    return out
+
+
 def local_planners(root: Path) -> list[str]:
     """Planner names from local dirs (a `planner.py`) under the planners subdir, excluding registered submodules."""
     pdir = root / PLANNERS_SUBDIR
