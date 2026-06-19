@@ -74,3 +74,6 @@
 [submodule "planners/navistar"]
 	path = planners/navistar
 	url = https://github.com/arena-planners/navistar.git
+[submodule "planners/navrep"]
+	path = planners/navrep
+	url = https://github.com/arena-planners/navrep.git
