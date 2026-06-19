@@ -68,3 +68,6 @@
 [submodule "planners/gensafenav"]
 	path = planners/gensafenav
 	url = https://github.com/arena-planners/gensafenav.git
+[submodule "planners/her-drl"]
+	path = planners/her-drl
+	url = https://github.com/arena-planners/her-drl.git
