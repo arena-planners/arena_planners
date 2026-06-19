@@ -77,3 +77,6 @@
 [submodule "planners/navrep"]
 	path = planners/navrep
 	url = https://github.com/arena-planners/navrep.git
+[submodule "planners/sonic"]
+	path = planners/sonic
+	url = https://github.com/arena-planners/sonic.git
