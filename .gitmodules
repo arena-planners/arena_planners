@@ -53,3 +53,6 @@
 	planner = hateb
 	kind = nav2
 	update = rebase
+[submodule "planners/cadrl"]
+	path = planners/cadrl
+	url = https://github.com/arena-planners/cadrl.git
