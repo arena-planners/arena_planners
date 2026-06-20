@@ -56,27 +56,54 @@
 [submodule "planners/cadrl"]
 	path = planners/cadrl
 	url = https://github.com/arena-planners/cadrl.git
+	planner = cadrl
+	branch = jazzy
+	update = rebase
 [submodule "planners/cd-sarl"]
 	path = planners/cd-sarl
 	url = https://github.com/arena-planners/cd-sarl.git
+	planner = cd-sarl
+	branch = jazzy
+	update = rebase
 [submodule "planners/crowdsurfer"]
 	path = planners/crowdsurfer
 	url = https://github.com/arena-planners/crowdsurfer.git
+	planner = crowdsurfer
+	branch = jazzy
+	update = rebase
 [submodule "planners/dsrnn"]
 	path = planners/dsrnn
 	url = https://github.com/arena-planners/dsrnn.git
+	planner = dsrnn
+	branch = jazzy
+	update = rebase
 [submodule "planners/gensafenav"]
 	path = planners/gensafenav
 	url = https://github.com/arena-planners/gensafenav.git
+	planner = gensafenav
+	branch = jazzy
+	update = rebase
 [submodule "planners/her-drl"]
 	path = planners/her-drl
 	url = https://github.com/arena-planners/her-drl.git
+	planner = her-drl
+	branch = jazzy
+	update = rebase
 [submodule "planners/navistar"]
 	path = planners/navistar
 	url = https://github.com/arena-planners/navistar.git
+	planner = navistar
+	branch = jazzy
+	update = rebase
 [submodule "planners/navrep"]
 	path = planners/navrep
 	url = https://github.com/arena-planners/navrep.git
+	planner = navrep
+	branch = jazzy
+	update = rebase
 [submodule "planners/sonic"]
 	path = planners/sonic
 	url = https://github.com/arena-planners/sonic.git
+	planner = sonic
+	branch = jazzy
+	update = rebase
