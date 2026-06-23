@@ -36,9 +36,7 @@ def _rotate_twist_by_tf(
         )
 
     out = TwistWithCovariance()
-    out.twist.linear.x, out.twist.linear.y, out.twist.linear.z = _rotate(
-        twist.linear.x, twist.linear.y, twist.linear.z
-    )
+    out.twist.linear.x, out.twist.linear.y, out.twist.linear.z = _rotate(twist.linear.x, twist.linear.y, twist.linear.z)
     out.twist.angular.x, out.twist.angular.y, out.twist.angular.z = _rotate(
         twist.angular.x, twist.angular.y, twist.angular.z
     )
