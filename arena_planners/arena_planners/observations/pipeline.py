@@ -29,6 +29,7 @@ from .data_sources.collectors import (
     PoseStampedCollector,
     TwistCollector,
 )
+from .data_sources.subgoal import SubgoalGenerator
 from .data_sources.tf import RobotPoseTFGenerator
 
 _TYPE_REGISTRY: dict[str, Callable[..., DataSource]] = {
@@ -42,6 +43,7 @@ _TYPE_REGISTRY: dict[str, Callable[..., DataSource]] = {
     "people_msgs/People": PeopleCollector,
     "arena_people_msgs/Pedestrians": ArenaPedestrianCollector,
     "RobotPoseTFGenerator": RobotPoseTFGenerator,
+    "SubgoalGenerator": SubgoalGenerator,
 }
 
 

@@ -30,25 +30,35 @@ def lookahead_on_path(
 
     rx, ry = float(robot_pose[0]), float(robot_pose[1])
     pts = np.asarray(path[:, :2], dtype=np.float32)
+    if pts.shape[0] == 1:
+        return float(pts[0, 0]), float(pts[0, 1])
 
-    dx = pts[:, 0] - rx
-    dy = pts[:, 1] - ry
-    dist2 = dx * dx + dy * dy
-    closest = int(np.argmin(dist2))
+    head = pts[:-1]
+    delta = pts[1:] - head
+    seg_len2 = (delta * delta).sum(axis=1)
+    robot_xy = np.array((rx, ry), dtype=np.float32)
+    offset = robot_xy - head
+    along = np.divide((offset * delta).sum(axis=1), seg_len2, out=np.zeros_like(seg_len2), where=seg_len2 > 0)
+    proj = head + np.clip(along, 0.0, 1.0)[:, None] * delta
+    closest = int(np.argmin(((proj - robot_xy) ** 2).sum(axis=1)))
 
-    target_x: float = float(pts[-1, 0])
-    target_y: float = float(pts[-1, 1])
-    acc = 0.0
-    for i in range(closest, pts.shape[0] - 1):
+    px, py = float(proj[closest, 0]), float(proj[closest, 1])
+    seg = float(np.hypot(float(pts[closest + 1, 0]) - px, float(pts[closest + 1, 1]) - py))
+    if seg >= lookahead:
+        s = lookahead / seg if seg > 0 else 0.0
+        return px + s * (float(pts[closest + 1, 0]) - px), py + s * (float(pts[closest + 1, 1]) - py)
+
+    acc = seg
+    for i in range(closest + 1, pts.shape[0] - 1):
         seg = float(np.hypot(pts[i + 1, 0] - pts[i, 0], pts[i + 1, 1] - pts[i, 1]))
         if acc + seg >= lookahead:
-            t = (lookahead - acc) / seg if seg > 0 else 0.0
-            target_x = float(pts[i, 0] + t * (pts[i + 1, 0] - pts[i, 0]))
-            target_y = float(pts[i, 1] + t * (pts[i + 1, 1] - pts[i, 1]))
-            break
+            s = (lookahead - acc) / seg if seg > 0 else 0.0
+            nx = float(pts[i, 0] + s * (pts[i + 1, 0] - pts[i, 0]))
+            ny = float(pts[i, 1] + s * (pts[i + 1, 1] - pts[i, 1]))
+            return nx, ny
         acc += seg
 
-    return target_x, target_y
+    return float(pts[-1, 0]), float(pts[-1, 1])
 
 
 def world_to_robot_frame(
