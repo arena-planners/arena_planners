@@ -23,6 +23,7 @@ from .data_sources.collectors import (
     CompressedImageCollector,
     ImageCollector,
     LaserScanCollector,
+    OccupancyGridCollector,
     OdometryCollector,
     PathCollector,
     PeopleCollector,
@@ -38,6 +39,7 @@ _TYPE_REGISTRY: dict[str, Callable[..., DataSource]] = {
     "sensor_msgs/CompressedImage": CompressedImageCollector,
     "nav_msgs/Odometry": OdometryCollector,
     "nav_msgs/Path": PathCollector,
+    "nav_msgs/OccupancyGrid": OccupancyGridCollector,
     "geometry_msgs/PoseStamped": PoseStampedCollector,
     "geometry_msgs/Twist": TwistCollector,
     "people_msgs/People": PeopleCollector,
@@ -109,8 +111,9 @@ class Pipeline:
               <name>:
                 type: <ros_msg_type_string or generator_class_name>
                 params:
-                  topic: <topic_name>  # for collectors
-                  ...                   # generator-specific kwargs
+                  topic: <topic_name>       # for collectors
+                  sensor: <SensorType>      # instead of topic; the robot adapter binds it
+                  ...                       # generator-specific kwargs
         """
         p = cls(node, ns=ns, simulation_ns=simulation_ns)
         aliases = config.get("aliases", {}) or {}
@@ -123,6 +126,11 @@ class Pipeline:
                 raise KeyError(f"unknown observation type {type_str!r}; registered: {sorted(_TYPE_REGISTRY)}")
 
             if issubclass(cls_, Collector):
+                if "sensor" in params:
+                    raise KeyError(
+                        f"datasource {name!r} declares sensor {params['sensor']!r}; "
+                        "only the robot adapter can bind that to a topic"
+                    )
                 topic = params.pop("topic", name)
                 source = cls_(name, topic=topic, **params)
             else:
