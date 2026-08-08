@@ -6,6 +6,8 @@ subgoal extraction. Pure numpy, no ROS, no rclpy.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 
 
@@ -59,6 +61,48 @@ def lookahead_on_path(
         acc += seg
 
     return float(pts[-1, 0]), float(pts[-1, 1])
+
+
+def lookahead_clear_on_path(
+    path: np.ndarray,
+    robot_pose: np.ndarray,
+    lookahead: float,
+    is_clear: Callable[[float, float], bool],
+    *,
+    step: float = 0.25,
+    minimum: float = 0.3,
+) -> tuple[float, float] | None:
+    """Furthest lookahead point whose straight chord from the robot stays clear.
+
+    Planners consuming this steer at the chord, not along the path, so a carrot in
+    free space is not enough - the whole segment to it has to be traversable.
+    Candidates are scanned outward rather than bisected: chord admissibility is not
+    monotone in distance along the path.
+
+    Falls back to the `minimum` carrot when nothing is clear, so a robot that has
+    already drifted into an obstacle still gets a target to move toward instead of
+    being handed its own position.
+    """
+    if path.shape[0] == 0:
+        return None
+
+    best = lookahead_on_path(path, robot_pose, minimum)
+    rx, ry = float(robot_pose[0]), float(robot_pose[1])
+
+    distance = minimum
+    while distance <= lookahead:
+        candidate = lookahead_on_path(path, robot_pose, distance)
+        if candidate is None:
+            break
+        samples = max(2, int(np.hypot(candidate[0] - rx, candidate[1] - ry) / 0.05))
+        if all(
+            is_clear(rx + (candidate[0] - rx) * t, ry + (candidate[1] - ry) * t)
+            for t in np.linspace(0.0, 1.0, samples)
+        ):
+            best = candidate
+        distance += step
+
+    return best
 
 
 def world_to_robot_frame(

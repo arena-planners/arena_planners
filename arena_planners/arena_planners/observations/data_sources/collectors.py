@@ -9,6 +9,7 @@ import numpy as np
 import people_msgs.msg as people_msgs
 import sensor_msgs.msg as sensor_msgs
 
+from ..utils.costmap import CostmapGrid
 from ..utils.pose import Pose2DType, pose3d_to_pose2d
 from ..utils.types import (
     ArenaPedestrianDetections,
@@ -141,6 +142,27 @@ class PathCollector(Collector[nav_msgs.Path, NavigationPath]):
 class TwistCollector(Collector[geometry_msgs.Twist, RobotVelocity]):
     def _preprocess(self, msg: geometry_msgs.Twist) -> RobotVelocity:
         return np.array((msg.linear.x, msg.linear.y, msg.angular.z), dtype=np.float32)
+
+
+class OccupancyGridCollector(Collector[nav_msgs.OccupancyGrid, CostmapGrid]):
+    """Costmap for planner-side clearance queries.
+
+    `CostmapGrid` is deliberately not wire-serialisable: the grid is only needed
+    by generators running in this process, and the bridge drops it rather than
+    paying tens of kilobytes per tick to send it to every planner subprocess.
+    """
+
+    def _preprocess(self, msg: nav_msgs.OccupancyGrid) -> CostmapGrid:
+        info = msg.info
+        if info.width == 0 or info.height == 0:
+            return CostmapGrid(np.zeros((0, 0), dtype=np.int8), 0.0, 0.0, 0.0)
+        grid = np.asarray(msg.data, dtype=np.int8).reshape(info.height, info.width)
+        return CostmapGrid(
+            grid,
+            float(info.resolution),
+            float(info.origin.position.x),
+            float(info.origin.position.y),
+        )
 
 
 class PeopleCollector(Collector[people_msgs.People, PedestrianDetections]):

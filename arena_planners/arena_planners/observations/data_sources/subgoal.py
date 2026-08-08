@@ -6,18 +6,24 @@ from typing import Any
 
 import numpy as np
 
-from ...geometry import lookahead_on_path
+from ...geometry import lookahead_clear_on_path, lookahead_on_path
 from ..utils.types import Pose2D, Pose2DType
 from .base import Generator
 
 
 class SubgoalGenerator(Generator[Pose2D]):
-    """Lookahead point on `global_plan`, falling back to the raw goal when the plan is empty."""
+    """Lookahead point on `global_plan`, falling back to the raw goal when the plan is empty.
+
+    Consumers steer straight at this point, so the carrot is only advanced while the
+    chord to it stays out of the costmap's inscribed region. Without a costmap the
+    lookahead is fixed, which cuts corners wherever the plan hugs one.
+    """
 
     requires: dict = {
         "global_plan": None,
         "robot_pose_from_tf": None,
         "goal_pose": None,
+        "costmap": None,
     }
 
     def __init__(self, name: str, lookahead: float = 2.0, **kwargs: Any) -> None:
@@ -28,13 +34,19 @@ class SubgoalGenerator(Generator[Pose2D]):
         goal_pose = kwargs["goal_pose"]
         robot_pose = kwargs["robot_pose_from_tf"]
         global_plan = kwargs["global_plan"]
+        costmap = kwargs["costmap"]
 
         if global_plan is None or robot_pose is None or len(global_plan) == 0:
             if goal_pose is None:
                 return np.zeros(3, dtype=Pose2DType)
             return np.asarray(goal_pose, dtype=Pose2DType)
 
-        target = lookahead_on_path(np.asarray(global_plan), np.asarray(robot_pose), self._lookahead)
+        plan = np.asarray(global_plan)
+        pose = np.asarray(robot_pose)
+        if costmap is None:
+            target = lookahead_on_path(plan, pose, self._lookahead)
+        else:
+            target = lookahead_clear_on_path(plan, pose, self._lookahead, costmap.is_clear)
         if target is None:
             return np.asarray(goal_pose, dtype=Pose2DType)
 
