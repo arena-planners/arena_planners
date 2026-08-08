@@ -148,6 +148,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         target_frame: str = "map",
         is_holonomic: bool = False,
         simulation_namespace: str = "",
+        velocity_limits: dict[str, tuple[float, float]] | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(node_name, namespace=namespace, use_global_arguments=False, **kwargs)
@@ -158,6 +159,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._target_frame = target_frame
         self._is_holonomic = bool(is_holonomic)
         self._simulation_namespace = simulation_namespace
+        self._velocity_limits = velocity_limits or {}
 
         self._obs_manager: Pipeline | None = None
         self._proc: PlannerProcess | None = None
@@ -497,4 +499,27 @@ class PlannerEdgeNode(ArenaMixinNode):
         else:
             self.get_logger().warning(f"unknown action_type {action.action_type!r}")
             return
+        self._clamp_to_limits(msg)
         self._cmd_vel_pub.publish(msg)
+
+    def _clamp_to_limits(self, msg: geometry_msgs.msg.Twist) -> None:
+        """Scale the whole twist into the velocity envelope; one factor, so curvature is preserved."""
+        if not self._velocity_limits:
+            return
+
+        def _scale(value: float, key: str) -> float:
+            lo, hi = self._velocity_limits.get(key, (-math.inf, math.inf))
+            if value > hi > 0.0:
+                return hi / value
+            if value < lo < 0.0:
+                return lo / value
+            return 1.0
+
+        scale = min(
+            _scale(msg.linear.x, "linear"),
+            _scale(msg.linear.y, "lateral"),
+            _scale(msg.angular.z, "angular"),
+        )
+        msg.linear.x *= scale
+        msg.linear.y *= scale
+        msg.angular.z *= scale
