@@ -96,8 +96,7 @@ def lookahead_clear_on_path(
             break
         samples = max(2, int(np.hypot(candidate[0] - rx, candidate[1] - ry) / 0.05))
         if all(
-            is_clear(rx + (candidate[0] - rx) * t, ry + (candidate[1] - ry) * t)
-            for t in np.linspace(0.0, 1.0, samples)
+            is_clear(rx + (candidate[0] - rx) * t, ry + (candidate[1] - ry) * t) for t in np.linspace(0.0, 1.0, samples)
         ):
             best = candidate
         distance += step
