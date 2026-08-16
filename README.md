@@ -17,10 +17,10 @@ arena_planners/
 ## Use from Arena
 
 ```sh
-arena launch mobile:=drl mobile.planner:=drlvo
+arena launch robot.mobile:=drl robot.mobile.planner:=drlvo
 ```
 
-The `mobile:=drl` adapter (in Arena's `task_generator`) spawns the planner subprocess, pipes observations to it via the bridge, and routes the returned action to `cmd_vel`. Optional global plan via `mobile.global_planner:=nav2/navfn` (or any registered `<family>/<kind>`).
+The `robot.mobile:=drl` adapter (in Arena's `task_generator`) spawns the planner subprocess, pipes observations to it via the bridge, and routes the returned action to `cmd_vel`. Optional global plan via `robot.mobile.global_planner:=nav2/navfn` (or any registered `<family>/<kind>`).
 
 ## Adding a planner
 
