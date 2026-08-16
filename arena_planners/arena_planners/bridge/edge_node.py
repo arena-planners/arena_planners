@@ -19,6 +19,9 @@ import numpy as np
 import rclpy.qos
 import yaml
 from arena_rclpy_mixins import ArenaMixinNode
+from arena_robots.lockstep_beat import LockstepBeat
+from rcl_interfaces.msg import ParameterType
+from rcl_interfaces.srv import GetParameters
 
 from .protocol import (
     PROTOCOL_VERSION,
@@ -54,6 +57,14 @@ if typing.TYPE_CHECKING:
 
 
 _PR_SET_PDEATHSIG = 1
+_PHYSICS_DT_TIMEOUT_S = 5.0
+_TIMING_LOG_EVERY = 100
+
+
+class _PlannerDied:
+    """Action-queue sentinel from the I/O thread."""
+
+
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
 
 
@@ -170,7 +181,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._run_id: str = uuid.uuid4().hex
 
         self._obs_queue: queue.Queue[bytes] = queue.Queue()
-        self._action_queue: asyncio.Queue[Frame] = asyncio.Queue()
+        self._action_queue: asyncio.Queue[Frame | _PlannerDied] = asyncio.Queue()
         self._ack_queue: asyncio.Queue[Frame] = asyncio.Queue()
         self._io_thread: threading.Thread | None = None
         self._io_stop = threading.Event()
@@ -185,6 +196,8 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._action_timeout = self.ROSParam[float]("planner_action_timeout_s", 0.5)
         self._init_timeout = self.ROSParam[float]("planner_init_timeout_s", 60.0)
         self._dropped_features_logged: set[str] = set()
+        self._interval: float = 1.0 / self._rate.value
+        self._beat: LockstepBeat | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -215,6 +228,9 @@ class PlannerEdgeNode(ArenaMixinNode):
             target_frame=self._target_frame,
             simulation_ns=self._simulation_namespace,
         )
+
+        self._interval = await self._snap_interval()
+        self._beat = LockstepBeat(self, "planner", grace_s=None, sleep=asyncio.sleep)
 
         self._proc = PlannerProcess(self._planner_command, endpoints)
         self._proc.start()
@@ -337,6 +353,7 @@ class PlannerEdgeNode(ArenaMixinNode):
 
             if not self._proc or not self._proc.is_alive():
                 self.get_logger().error("planner process died unexpectedly")
+                loop.call_soon_threadsafe(self._action_queue.put_nowait, _PlannerDied())
                 break
 
     # ------------------------------------------------------------------
@@ -344,56 +361,120 @@ class PlannerEdgeNode(ArenaMixinNode):
     # ------------------------------------------------------------------
 
     async def run_loop(self) -> None:
-        """Drive the obs/action cycle. Caller should await this after setup()."""
+        """Drive the obs/action cycle under the `planner/<robot>` lockstep beat,
+        pulsing each tick with the obs stamp its action was computed for."""
         assert self._obs_manager is not None
+        assert self._beat is not None
 
         self.get_logger().info(
-            f"run_loop entered rate_hz={self._rate.value} action_timeout_s={self._action_timeout.value}"
+            f"run_loop entered interval_s={self._interval:.4f} action_timeout_s={self._action_timeout.value}"
         )
 
         try:
-            with self.sim_time_rate(self._rate.value) as (done, rate_events):
-                while not done.is_set():
-                    await rate_events.get()
+            with self.sim_time_rate(1.0 / self._interval) as (done, rate_events):
+                loop = self.event_loop
+                timing = {"sim": 0.0, "collect": 0.0, "action": 0.0}
+                pulsed_at = loop.time()
+                try:
+                    await self._beat.acquire(self._interval)
+                    while not done.is_set():
+                        await rate_events.get()
+                        tick_start = loop.time()
+                        timing["sim"] += tick_start - pulsed_at
 
-                    t = self.sim_time
-                    features = self._filter_wire_features(self._obs_manager.collect())
-                    self._seq += 1
+                        t = self.sim_time
+                        features = self._filter_wire_features(self._obs_manager.collect())
+                        self._seq += 1
+                        collected_at = loop.time()
+                        timing["collect"] += collected_at - tick_start
 
-                    obs_frame = Obs(
-                        t_sec=t.sec,
-                        t_nanosec=t.nanosec,
-                        seq=self._seq,
-                        features=features,
-                    )
-                    self._obs_queue.put_nowait(encode_frame(obs_frame))
-
-                    try:
-                        frame = await asyncio.wait_for(
-                            self._action_queue.get(),
-                            timeout=self._action_timeout.value,
+                        obs_frame = Obs(
+                            t_sec=t.sec,
+                            t_nanosec=t.nanosec,
+                            seq=self._seq,
+                            features=features,
                         )
-                    except TimeoutError:
-                        self.get_logger().warning(
-                            f"no action received within {self._action_timeout.value}s (seq={self._seq})"
-                        )
-                        continue
+                        self._obs_queue.put_nowait(encode_frame(obs_frame))
 
-                    if isinstance(frame, Action):
-                        if frame.seq > self._seq:
+                        frame = await self._await_action()
+                        timing["action"] += loop.time() - collected_at
+                        if isinstance(frame, Action):
+                            if frame.seq > self._seq:
+                                self.get_logger().warning(
+                                    f"discarding impossible Action seq={frame.seq} > sent={self._seq}"
+                                )
+                            else:
+                                self._publish_action(frame, features)
+                        else:
                             self.get_logger().warning(
-                                f"discarding impossible Action seq={frame.seq} > sent={self._seq}"
+                                f"unexpected non-Action frame on action queue seq={self._seq}: "
+                                f"{type(frame).__name__}={frame!r}"
                             )
-                            continue
-                        self._publish_action(frame, features)
-                    else:
-                        self.get_logger().warning(
-                            f"unexpected non-Action frame on action queue seq={self._seq}: "
-                            f"{type(frame).__name__}={frame!r}"
-                        )
+                        self._beat.pulse(stamp=t.to_msg())
+                        pulsed_at = loop.time()
+                        if self._seq % _TIMING_LOG_EVERY == 0:
+                            avg = {k: 1e3 * v / _TIMING_LOG_EVERY for k, v in timing.items()}
+                            gens = " ".join(
+                                f"{k}={1e3 * v / _TIMING_LOG_EVERY:.1f}"
+                                for k, v in self._obs_manager.generator_seconds.items()
+                            )
+                            self.get_logger().info(
+                                f"tick wall ms (avg of {_TIMING_LOG_EVERY}): "
+                                f"sim={avg['sim']:.1f} collect={avg['collect']:.1f} action={avg['action']:.1f} "
+                                f"[{gens}]"
+                            )
+                            timing = dict.fromkeys(timing, 0.0)
+                            self._obs_manager.generator_seconds.clear()
+                finally:
+                    await self._beat.release()
         except BaseException as exc:
             self.get_logger().error(f"run_loop crashed: {exc!r}")
             raise
+
+    async def _await_action(self) -> Frame:
+        """Wait for this obs's action: the timeout only warns (skipping a tick would
+        deadlock a lockstep run against the frozen sim), stale actions are dropped."""
+        while True:
+            try:
+                frame = await asyncio.wait_for(self._action_queue.get(), timeout=self._action_timeout.value)
+            except TimeoutError:
+                self.get_logger().warning(
+                    f"no action received within {self._action_timeout.value}s (seq={self._seq}), still waiting"
+                )
+                continue
+            if isinstance(frame, _PlannerDied):
+                raise RuntimeError("planner process died")
+            if isinstance(frame, Action) and frame.seq < self._seq:
+                self.get_logger().warning(f"dropping stale Action seq={frame.seq} < sent={self._seq}")
+                continue
+            return frame
+
+    async def _snap_interval(self) -> float:
+        """Planner tick snapped to whole physics steps so lockstep chunks and ticks coincide."""
+        requested = 1.0 / self._rate.value
+        client = self.create_client_wrapper(GetParameters, "/arena/get_parameters", timeout=_PHYSICS_DT_TIMEOUT_S)
+        dt: float | None = None
+        try:
+            response = await client.call_timeout(GetParameters.Request(names=["physics_dt"]))
+        except Exception as exc:
+            self.get_logger().warning(f"physics_dt read failed ({exc}), planner tick stays {requested:.4f}s")
+        else:
+            values = response.values if response is not None else []
+            if values and values[0].type == ParameterType.PARAMETER_DOUBLE and values[0].double_value > 0.0:
+                dt = values[0].double_value
+            else:
+                self.get_logger().warning(f"physics_dt unavailable on /arena, planner tick stays {requested:.4f}s")
+        finally:
+            self.destroy_client(client.client)
+        if dt is None:
+            return requested
+        interval = max(1, round(requested / dt)) * dt
+        if abs(interval - requested) > 1e-9:
+            self.get_logger().info(
+                f"planner_rate_hz={self._rate.value:g} snapped to {1.0 / interval:.3f} Hz "
+                f"({interval:.4f}s, physics_dt={dt:g})"
+            )
+        return interval
 
     # ------------------------------------------------------------------
     # Outbound control messages
@@ -420,7 +501,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         if not isinstance(frame, ResetAck):
             raise ProtocolError(f"expected reset_ack, got {frame!r}")
         t_after = self.sim_time
-        step_s = 1.0 / self._rate.value
+        step_s = self._interval
         elapsed = (t_after - t_before).to_seconds()
         if elapsed > step_s:
             self.get_logger().warning(f"reset round-trip {elapsed:.3f}s > one sim step {step_s:.3f}s")

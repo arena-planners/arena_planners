@@ -10,6 +10,7 @@ already exist via the Generator base class in data_sources.base).
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -59,6 +60,7 @@ class Pipeline:
         self._collectors: dict[str, Collector] = {}
         self._generators: dict[str, Generator] = {}
         self._sub_handles: list = []
+        self.generator_seconds: dict[str, float] = {}
 
     def add(self, name: str, source: DataSource, qos: QoSProfile | int | None = None) -> None:
         if isinstance(source, Collector):
@@ -84,8 +86,13 @@ class Pipeline:
 
     def collect(self) -> dict[str, Any]:
         out: dict[str, Any] = {name: c.get_observation() for name, c in self._collectors.items()}
+        computed: dict[int, Any] = {}
         for name, gen in self._generators.items():
-            out[name] = gen.get_observation(out)
+            if id(gen) not in computed:
+                start = time.perf_counter()
+                computed[id(gen)] = gen.get_observation(out)
+                self.generator_seconds[name] = self.generator_seconds.get(name, 0.0) + time.perf_counter() - start
+            out[name] = computed[id(gen)]
         return out
 
     def shutdown(self) -> None:

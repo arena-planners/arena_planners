@@ -9,6 +9,9 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>arena_rclpy_mixins</exec_depend>
+  <exec_depend>arena_robots</exec_depend>
+  <exec_depend>arena_runtime_msgs</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>arena_people_msgs</exec_depend>
   <exec_depend>people_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
