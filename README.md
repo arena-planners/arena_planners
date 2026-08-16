@@ -20,7 +20,7 @@ arena_planners/
 arena launch robot.mobile:=drl robot.mobile.planner:=drlvo
 ```
 
-The `robot.mobile:=drl` adapter (in Arena's `task_generator`) spawns the planner subprocess, pipes observations to it via the bridge, and routes the returned action to `cmd_vel`. Optional global plan via `robot.mobile.global_planner:=nav2/navfn` (or any registered `<family>/<kind>`). `robot.mobile.rate:=<hz>` sets the planner tick (default 10, or `drl.rate` in the robot's `caps/mobile.yaml`), snapped to whole physics steps under lockstep.
+The `robot.mobile:=drl` adapter (in Arena's `task_generator`) spawns the planner subprocess, pipes observations to it via the bridge, and routes the returned action to `cmd_vel`. Optional global plan via `robot.mobile.global_planner:=nav2/navfn` (or any registered `<family>/<kind>`). `robot.mobile.rate:=<hz>` sets the planner tick (default 10, or `drl.rate` in the robot's `caps/mobile.yaml`), snapped to whole physics steps under lockstep. Planner subprocesses get `OMP_NUM_THREADS`/`MKL_NUM_THREADS`/`OPENBLAS_NUM_THREADS=4` and `OMP_WAIT_POLICY=PASSIVE` unless already set in the environment.
 
 ## Adding a planner
 

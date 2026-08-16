@@ -58,6 +58,12 @@ if typing.TYPE_CHECKING:
 
 _PR_SET_PDEATHSIG = 1
 _PHYSICS_DT_TIMEOUT_S = 5.0
+_PLANNER_THREAD_ENV = {
+    "OMP_NUM_THREADS": "4",
+    "MKL_NUM_THREADS": "4",
+    "OPENBLAS_NUM_THREADS": "4",
+    "OMP_WAIT_POLICY": "PASSIVE",
+}
 _TIMING_LOG_EVERY = 100
 
 
@@ -88,6 +94,8 @@ class PlannerProcess:
 
     def start(self) -> None:
         env = os.environ.copy()
+        for key, value in _PLANNER_THREAD_ENV.items():
+            env.setdefault(key, value)
         env.update(env_from_endpoints(self._endpoints))
         env.update(self._extra_env)
         self._proc = subprocess.Popen(
