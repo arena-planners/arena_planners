@@ -13,7 +13,6 @@
   <exec_depend>arena_runtime_msgs</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>arena_people_msgs</exec_depend>
-  <exec_depend>people_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf2_geometry_msgs</exec_depend>

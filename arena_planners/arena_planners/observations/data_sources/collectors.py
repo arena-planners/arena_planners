@@ -6,7 +6,6 @@ import arena_people_msgs.msg as arena_people_msgs
 import geometry_msgs.msg as geometry_msgs
 import nav_msgs.msg as nav_msgs
 import numpy as np
-import people_msgs.msg as people_msgs
 import sensor_msgs.msg as sensor_msgs
 
 from ..utils.costmap import CostmapGrid
@@ -16,7 +15,6 @@ from ..utils.types import (
     ImageData,
     LidarRanges,
     NavigationPath,
-    PedestrianDetections,
     Pose2D,
     RobotState,
     RobotVelocity,
@@ -163,22 +161,6 @@ class OccupancyGridCollector(Collector[nav_msgs.OccupancyGrid, CostmapGrid]):
             float(info.origin.position.x),
             float(info.origin.position.y),
         )
-
-
-class PeopleCollector(Collector[people_msgs.People, PedestrianDetections]):
-    """Flattens people_msgs/People to (N, 5) ndarray: [id, x, y, vx, vy]."""
-
-    def _preprocess(self, msg: people_msgs.People) -> PedestrianDetections:
-        if not msg.people:
-            return np.empty((0, 5), dtype=np.float32)
-        out = np.empty((len(msg.people), 5), dtype=np.float32)
-        for i, p in enumerate(msg.people):
-            try:
-                pid = float(p.tags[p.tagnames.index("id")])
-            except (ValueError, IndexError):
-                pid = float(i)
-            out[i] = (pid, p.position.x, p.position.y, p.velocity.x, p.velocity.y)
-        return out
 
 
 class ArenaPedestrianCollector(Collector[arena_people_msgs.Pedestrians, ArenaPedestrianDetections]):

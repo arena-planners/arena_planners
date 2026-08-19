@@ -8,7 +8,6 @@ from .collectors import (
     LaserScanCollector,
     OccupancyGridCollector,
     OdometryCollector,
-    PeopleCollector,
     PoseStampedCollector,
     TwistCollector,
 )
@@ -24,7 +23,6 @@ __all__ = [
     "LaserScanCollector",
     "OccupancyGridCollector",
     "OdometryCollector",
-    "PeopleCollector",
     "PoseStampedCollector",
     "RobotPoseTFGenerator",
     "TwistCollector",

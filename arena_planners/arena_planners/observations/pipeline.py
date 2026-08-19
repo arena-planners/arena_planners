@@ -27,7 +27,6 @@ from .data_sources.collectors import (
     OccupancyGridCollector,
     OdometryCollector,
     PathCollector,
-    PeopleCollector,
     PoseStampedCollector,
     TwistCollector,
 )
@@ -43,7 +42,6 @@ _TYPE_REGISTRY: dict[str, Callable[..., DataSource]] = {
     "nav_msgs/OccupancyGrid": OccupancyGridCollector,
     "geometry_msgs/PoseStamped": PoseStampedCollector,
     "geometry_msgs/Twist": TwistCollector,
-    "people_msgs/People": PeopleCollector,
     "arena_people_msgs/Pedestrians": ArenaPedestrianCollector,
     "RobotPoseTFGenerator": RobotPoseTFGenerator,
     "SubgoalGenerator": SubgoalGenerator,

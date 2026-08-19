@@ -18,5 +18,4 @@ RobotVelocity = np.ndarray  # shape (3,) -> [vx, vy, omega]
 NavigationPath = np.ndarray  # shape (N, 2) -> XY waypoints
 ImageData = np.ndarray  # shape (C, H, W) or (H, W)
 SafetyStatus = bool
-PedestrianDetections = np.ndarray  # shape (N, 5) -> [id, x, y, vx, vy]
 ArenaPedestrianDetections = np.ndarray  # shape (N, 5) -> [id, x, y, vx, vy]
