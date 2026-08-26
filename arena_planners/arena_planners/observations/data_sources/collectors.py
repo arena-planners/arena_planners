@@ -10,6 +10,7 @@ import sensor_msgs.msg as sensor_msgs
 
 from ..utils.costmap import CostmapGrid
 from ..utils.pose import Pose2DType, pose3d_to_pose2d
+from ..utils.scan import canonical_scan
 from ..utils.types import (
     ArenaPedestrianDetections,
     ImageData,
@@ -63,42 +64,23 @@ def _apply_normalize(arr: np.ndarray, mode: str | None) -> np.ndarray:
     raise ValueError(f"unknown normalize mode {mode!r}; expected one of: unit, imagenet, depth_mm_to_m")
 
 
-def _forward_aligned_scan(
-    ranges: np.ndarray, angle_min: float, angle_increment: float, range_max: float, beams: int
-) -> np.ndarray:
-    """Resample a robot-frame LaserScan to `beams` rays over a full circle, ray 0 along the
-    robot heading and increasing CCW. Uses the scan's own angle_min/increment, so it is
-    robot-agnostic; bearings outside the scan's FOV are filled with range_max.
-    """
-    n = len(ranges)
-    if angle_increment == 0.0 or n < 2:
-        return np.full(beams, range_max, dtype=np.float32)
-    theta = angle_min + angle_increment * np.arange(n, dtype=np.float64)
-    if theta[0] > theta[-1]:
-        theta = theta[::-1]
-        ranges = ranges[::-1]
-    phi = (2.0 * np.pi / beams) * np.arange(beams, dtype=np.float64)
-    phi = (phi + np.pi) % (2.0 * np.pi) - np.pi
-    out = np.interp(phi, theta, ranges, left=range_max, right=range_max).astype(np.float32)
-    out[(phi < theta[0]) | (phi > theta[-1])] = range_max
-    return out
-
-
 class LaserScanCollector(Collector[sensor_msgs.LaserScan, LidarRanges]):
+    """Emits the canonical scan (see utils.scan), at `canonical_beams` or the message's own count."""
+
     def __init__(self, name: str, topic: str, canonical_beams: int | None = None, **kwargs) -> None:
+        if canonical_beams is not None and (not isinstance(canonical_beams, int) or canonical_beams <= 0):
+            raise ValueError(f"{name}: canonical_beams must be a positive int, got {canonical_beams!r}")
+        self._canonical_beams = canonical_beams
         super().__init__(name, topic, **kwargs)
-        self._canonical_beams = int(canonical_beams) if canonical_beams else None
 
     def _preprocess(self, msg: sensor_msgs.LaserScan) -> LidarRanges:
-        if len(msg.ranges) == 0:
-            return np.array([])
-        laser = np.array(msg.ranges, np.float32)
-        laser[np.isnan(laser)] = msg.range_max
-        laser[np.isinf(laser)] = msg.range_max
-        if self._canonical_beams is None:
-            return laser
-        return _forward_aligned_scan(
-            laser, float(msg.angle_min), float(msg.angle_increment), float(msg.range_max), self._canonical_beams
+        return canonical_scan(
+            msg.ranges,
+            float(msg.angle_min),
+            float(msg.angle_increment),
+            float(msg.range_min),
+            float(msg.range_max),
+            self._canonical_beams or len(msg.ranges),
         )
 
 
