@@ -205,6 +205,7 @@ class PlannerEdgeNode(ArenaMixinNode):
 
         self._rate = self.ROSParam[float]("planner_rate_hz", 10.0)
         self._action_timeout = self.ROSParam[float]("planner_action_timeout_s", 0.5)
+        self._action_max_misses = self.ROSParam[int]("planner_action_max_misses", 20)
         self._init_timeout = self.ROSParam[float]("planner_init_timeout_s", 60.0)
         self._dropped_features_logged: set[str] = set()
         self._interval: float = 1.0 / self._rate.value
@@ -467,14 +468,18 @@ class PlannerEdgeNode(ArenaMixinNode):
             raise
 
     async def _await_action(self) -> Frame:
-        """Wait for this obs's action: the timeout only warns (skipping a tick would
-        deadlock a lockstep run against the frozen sim), stale actions are dropped."""
+        """Wait for this obs's action: each timeout warns (skipping a tick would deadlock a
+        lockstep run against the frozen sim) until planner_action_max_misses, stale actions are dropped."""
+        misses = 0
         while True:
             try:
                 frame = await asyncio.wait_for(self._action_queue.get(), timeout=self._action_timeout.value)
             except TimeoutError:
                 if self._dead is not None:
                     raise _PlannerDiedError(self._dead) from None
+                misses += 1
+                if misses >= self._action_max_misses.value:
+                    raise _PlannerDiedError(f"no action after {misses} misses") from None
                 self.get_logger().warning(
                     f"no action received within {self._action_timeout.value}s (seq={self._seq}), still waiting"
                 )
