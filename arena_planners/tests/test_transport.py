@@ -7,6 +7,7 @@ import time
 import pytest
 import zmq
 
+from arena_planners.bridge.protocol import BridgeError
 from arena_planners.bridge.transport import (
     ZmqPullTransport,
     ZmqPushTransport,
@@ -143,6 +144,29 @@ def test_endpoints_from_env_all_missing(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     with pytest.raises(RuntimeError):
         endpoints_from_env()
+
+
+# ---------------------------------------------------------------------------
+# send with no peer raises instead of blocking
+# ---------------------------------------------------------------------------
+
+
+def test_send_without_peer_raises_bridge_error(tmp_path):
+    sock_path = tmp_path / "no_peer.sock"
+    endpoint = f"ipc://{sock_path}"
+
+    ctx = zmq.Context()
+    try:
+        push = ZmqPushTransport(endpoint, control=True, ctx=ctx)
+        t0 = time.monotonic()
+        with pytest.raises(BridgeError, match=endpoint):
+            push.send_frame(PAYLOAD)
+        elapsed = time.monotonic() - t0
+        push.close()
+    finally:
+        ctx.term()
+
+    assert elapsed < 3.0
 
 
 # ---------------------------------------------------------------------------

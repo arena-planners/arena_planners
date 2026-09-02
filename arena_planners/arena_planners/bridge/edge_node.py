@@ -256,9 +256,21 @@ class PlannerEdgeNode(ArenaMixinNode):
             planner_config={},
             run_id=self._run_id,
         )
-        self._control_push.send_frame(encode_frame(init_frame))
 
         deadline = self.event_loop.time() + self._init_timeout.value
+        while not self._control_push.poll(timeout_ms=200):
+            if not self._proc.is_alive():
+                rc = self._proc.returncode
+                raise RuntimeError(
+                    f"planner subprocess exited before connecting (returncode={rc}); command={self._planner_command!r}"
+                )
+            if self.event_loop.time() >= deadline:
+                raise TimeoutError(
+                    f"planner did not connect within {self._init_timeout.value}s; command={self._planner_command!r}"
+                )
+            await asyncio.sleep(0)
+        self._control_push.send_frame(encode_frame(init_frame))
+
         init_ack_buf: bytes | None = None
         while True:
             if self._control_pull.poll(timeout_ms=200):

@@ -124,6 +124,7 @@ def _do_handshake(control_push: ZmqPushTransport, control_pull: ZmqPullTransport
         planner_config={},
         run_id=uuid.uuid4().hex,
     )
+    assert control_push.poll(_TIMEOUT_MS), "planner never connected"
     control_push.send_frame(encode_frame(init))
     frame = _recv_control(control_pull)
     assert isinstance(frame, InitAck), f"expected InitAck, got {frame!r}"

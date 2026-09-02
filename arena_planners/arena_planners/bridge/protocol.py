@@ -18,6 +18,10 @@ class ProtocolError(Exception):
     """Raised on unknown op or malformed payload."""
 
 
+class BridgeError(RuntimeError):
+    """Raised when a bridge send cannot complete within its timeout."""
+
+
 @dataclasses.dataclass(frozen=False)
 class Init:
     """Edge to planner: open the session."""

@@ -10,12 +10,15 @@ from dataclasses import dataclass
 
 import zmq
 
+from .protocol import BridgeError
+
 OBS_POLICY_LOSSLESS = "lossless"
 OBS_POLICY_LATEST_ONLY = "latest_only"
 
 ObsPolicy = typing.Literal["lossless", "latest_only"]
 
 _CONTROL_HWM = 16
+_SEND_TIMEOUT_MS = 1000
 
 
 class Transport(typing.Protocol):
@@ -113,6 +116,7 @@ class ZmqPushTransport:
         else:
             self._sock.connect(endpoint)
             self._bound_endpoint = None
+        self._endpoint = endpoint
 
     @property
     def bound_endpoint(self) -> str:
@@ -127,7 +131,12 @@ class ZmqPushTransport:
         return self._sock
 
     def send_frame(self, buf: bytes) -> None:
-        self._sock.send(buf)
+        if not self._sock.poll(_SEND_TIMEOUT_MS, zmq.POLLOUT):
+            raise BridgeError(f"no peer accepting frames on {self._endpoint} within {_SEND_TIMEOUT_MS}ms")
+        try:
+            self._sock.send(buf, zmq.NOBLOCK)
+        except zmq.Again as exc:
+            raise BridgeError(f"send on {self._endpoint} would block") from exc
 
     def recv_frame(self) -> bytes:
         raise NotImplementedError("PUSH socket cannot receive")
