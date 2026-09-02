@@ -19,6 +19,7 @@ import pytest
 from arena_planners.bridge.protocol import (
     PROTOCOL_VERSION,
     Action,
+    BridgeError,
     Bye,
     Cancel,
     CancelAck,
@@ -261,3 +262,8 @@ class TestPlannerCrashPropagation:
         rc = proc.poll()
         assert rc is not None, "planner should have exited after crash"
         assert rc != 0, f"expected nonzero exit code, got {rc}"
+
+        t0 = time.monotonic()
+        with pytest.raises(BridgeError):
+            cpush.send_frame(encode_frame(Reset(episode_id="after-crash")))
+        assert time.monotonic() - t0 < 3.0

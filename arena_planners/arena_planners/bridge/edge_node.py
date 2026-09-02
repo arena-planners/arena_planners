@@ -27,9 +27,11 @@ from .protocol import (
     PROTOCOL_VERSION,
     SCHEMA_VERSION,
     Action,
+    BridgeError,
     Bye,
     Cancel,
     CancelAck,
+    Error,
     Frame,
     Heartbeat,
     Init,
@@ -67,8 +69,8 @@ _PLANNER_THREAD_ENV = {
 _TIMING_LOG_EVERY = 100
 
 
-class _PlannerDied:
-    """Action-queue sentinel from the I/O thread."""
+class _PlannerDiedError(RuntimeError):
+    """Raised once the planner subprocess is gone or unusable."""
 
 
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
@@ -189,10 +191,11 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._run_id: str = uuid.uuid4().hex
 
         self._obs_queue: queue.Queue[bytes] = queue.Queue()
-        self._action_queue: asyncio.Queue[Frame | _PlannerDied] = asyncio.Queue()
+        self._action_queue: asyncio.Queue[Frame | _PlannerDiedError] = asyncio.Queue()
         self._ack_queue: asyncio.Queue[Frame] = asyncio.Queue()
         self._io_thread: threading.Thread | None = None
         self._io_stop = threading.Event()
+        self._dead: str | None = None
 
         self._cmd_vel_pub: rclpy.publisher.Publisher | None = None
         self._seq: int = 0
@@ -307,7 +310,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._io_thread.start()
 
     async def teardown(self) -> None:
-        if self._control_push is not None:
+        if self._control_push is not None and self._dead is None:
             try:
                 self._control_push.send_frame(encode_frame(Shutdown()))
                 if self._control_pull is not None and self._control_pull.poll(2000):
@@ -350,12 +353,17 @@ class PlannerEdgeNode(ArenaMixinNode):
                     self._data_push.send_frame(buf)
             except queue.Empty:
                 pass
+            except BridgeError as exc:
+                self._mark_dead(str(exc))
+                break
 
             if self._data_pull is not None and self._data_pull.poll(timeout_ms=10):
                 try:
                     frame = decode_frame(self._data_pull.recv_frame())
                     if isinstance(frame, Action):
                         loop.call_soon_threadsafe(self._action_queue.put_nowait, frame)
+                    elif isinstance(frame, Error):
+                        self._mark_dead(f"planner error {frame.code}: {frame.msg}")
                     else:
                         self.get_logger().warning(f"unexpected frame on data channel: {frame!r}")
                 except Exception as exc:
@@ -372,9 +380,16 @@ class PlannerEdgeNode(ArenaMixinNode):
                     self.get_logger().error(f"IO thread control decode error: {exc}")
 
             if not self._proc or not self._proc.is_alive():
-                self.get_logger().error("planner process died unexpectedly")
-                loop.call_soon_threadsafe(self._action_queue.put_nowait, _PlannerDied())
+                rc = self._proc.returncode if self._proc else None
+                self._mark_dead(f"planner process exited (returncode={rc})")
                 break
+
+    def _mark_dead(self, reason: str) -> None:
+        if self._dead is not None:
+            return
+        self._dead = reason
+        self.get_logger().error(reason)
+        self.event_loop.call_soon_threadsafe(self._action_queue.put_nowait, _PlannerDiedError(reason))
 
     # ------------------------------------------------------------------
     # Per-tick main loop
@@ -458,12 +473,14 @@ class PlannerEdgeNode(ArenaMixinNode):
             try:
                 frame = await asyncio.wait_for(self._action_queue.get(), timeout=self._action_timeout.value)
             except TimeoutError:
+                if self._dead is not None:
+                    raise _PlannerDiedError(self._dead) from None
                 self.get_logger().warning(
                     f"no action received within {self._action_timeout.value}s (seq={self._seq}), still waiting"
                 )
                 continue
-            if isinstance(frame, _PlannerDied):
-                raise RuntimeError("planner process died")
+            if isinstance(frame, _PlannerDiedError):
+                raise frame
             if isinstance(frame, Action) and frame.seq < self._seq:
                 self.get_logger().warning(f"dropping stale Action seq={frame.seq} < sent={self._seq}")
                 continue
@@ -500,10 +517,19 @@ class PlannerEdgeNode(ArenaMixinNode):
     # Outbound control messages
     # ------------------------------------------------------------------
 
+    def _send_control(self, frame: Frame) -> None:
+        assert self._control_push is not None
+        if self._dead is not None:
+            raise _PlannerDiedError(self._dead)
+        try:
+            self._control_push.send_frame(encode_frame(frame))
+        except BridgeError as exc:
+            self._mark_dead(str(exc))
+            raise _PlannerDiedError(str(exc)) from exc
+
     async def request_cancel(self) -> None:
         """Send Cancel and await CancelAck."""
-        assert self._control_push is not None
-        self._control_push.send_frame(encode_frame(Cancel()))
+        self._send_control(Cancel())
         frame = await self._drain_until(CancelAck, timeout=self._control_ack_timeout_s)
         if not isinstance(frame, CancelAck):
             raise ProtocolError(f"expected cancel_ack, got {frame!r}")
@@ -514,9 +540,8 @@ class PlannerEdgeNode(ArenaMixinNode):
         initial_state: dict | None = None,
     ) -> None:
         """Send Reset and await ResetAck; warn if round-trip exceeds one sim step."""
-        assert self._control_push is not None
         t_before = self.sim_time
-        self._control_push.send_frame(encode_frame(Reset(episode_id=episode_id, initial_state=initial_state)))
+        self._send_control(Reset(episode_id=episode_id, initial_state=initial_state))
         frame = await self._drain_until(ResetAck, timeout=self._control_ack_timeout_s)
         if not isinstance(frame, ResetAck):
             raise ProtocolError(f"expected reset_ack, got {frame!r}")
