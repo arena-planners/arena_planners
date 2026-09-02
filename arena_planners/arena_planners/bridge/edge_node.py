@@ -314,7 +314,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         if self._control_push is not None and self._dead is None:
             try:
                 self._control_push.send_frame(encode_frame(Shutdown()))
-                if self._control_pull is not None and self._control_pull.poll(2000):
+                if self._control_pull is not None and self._control_pull.poll(500):
                     bye = decode_frame(self._control_pull.recv_frame())
                     if not isinstance(bye, Bye):
                         self.get_logger().warning(f"expected bye, got {bye!r}")
