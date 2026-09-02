@@ -102,7 +102,6 @@ class PlannerProcess:
         env.update(self._extra_env)
         self._proc = subprocess.Popen(
             self._command,
-            start_new_session=True,
             preexec_fn=_die_with_parent,
             env=env,
         )
@@ -124,12 +123,12 @@ class PlannerProcess:
         if self._proc.poll() is not None:
             return self._proc.returncode  # type: ignore[return-value]
         with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+            self._proc.terminate()
         try:
             self._proc.wait(timeout=grace_seconds)
         except subprocess.TimeoutExpired:
             with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+                self._proc.kill()
             self._proc.wait()
         return self._proc.returncode  # type: ignore[return-value]
 
