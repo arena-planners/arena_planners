@@ -38,6 +38,7 @@ from arena_planners.bridge.transport import (
 _log = logging.getLogger(__name__)
 
 KNOWN_ACTION_TYPES: frozenset[str] = frozenset({"differential_drive", "omnidirectional"})
+_ACTION_DIMS: dict[str, int] = {"differential_drive": 2, "omnidirectional": 3}
 
 _DEFAULT_HEARTBEAT_PERIOD_S: float = 1.0
 
@@ -80,6 +81,7 @@ class PlannerSDK:
 
         self._heartbeat_seq: int = 0
         self._last_heartbeat_ns: int = 0
+        self._active = False
 
     def _send_control(self, frame: Frame) -> None:
         self._control_push.send_frame(encode_frame(frame))
@@ -101,6 +103,18 @@ class PlannerSDK:
         frame: Obs,
         step_fn: typing.Callable[[dict], list[float]],
     ) -> None:
+        if not self._active:
+            standstill = [0.0] * _ACTION_DIMS[self._action_type]
+            self._send_data(
+                Action(
+                    t_sec=frame.t_sec,
+                    t_nanosec=frame.t_nanosec,
+                    seq=frame.seq,
+                    action_type=self._action_type,
+                    action=standstill,
+                )
+            )
+            return
         try:
             result = step_fn(frame.features)
         except Exception as exc:
@@ -126,9 +140,11 @@ class PlannerSDK:
         if isinstance(frame, Reset):
             if on_reset is not None:
                 on_reset(frame.episode_id, frame.initial_state)
+            self._active = True
             self._send_control(ResetAck())
             return True
         if isinstance(frame, Cancel):
+            self._active = False
             if on_cancel is not None:
                 on_cancel()
             self._send_control(CancelAck())

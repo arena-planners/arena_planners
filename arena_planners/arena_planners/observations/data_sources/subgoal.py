@@ -31,7 +31,7 @@ class SubgoalGenerator(Generator[Pose2D]):
         self._lookahead = float(lookahead)
         self._require_plan = bool(require_plan)
 
-    def _generate(self, **kwargs: Any) -> Pose2D:
+    def _generate(self, **kwargs: Any) -> Pose2D | None:
         goal_pose = kwargs["goal_pose"]
         robot_pose = kwargs["robot_pose_from_tf"]
         global_plan = kwargs["global_plan"]
@@ -41,7 +41,7 @@ class SubgoalGenerator(Generator[Pose2D]):
             if self._require_plan and robot_pose is not None:
                 return np.asarray(robot_pose, dtype=Pose2DType)
             if goal_pose is None:
-                return np.zeros(3, dtype=Pose2DType)
+                return None
             return np.asarray(goal_pose, dtype=Pose2DType)
 
         plan = np.asarray(global_plan)
@@ -51,7 +51,7 @@ class SubgoalGenerator(Generator[Pose2D]):
         else:
             target = lookahead_clear_on_path(plan, pose, self._lookahead, costmap.is_clear)
         if target is None:
-            return np.asarray(goal_pose, dtype=Pose2DType)
+            return None if goal_pose is None else np.asarray(goal_pose, dtype=Pose2DType)
 
         tx, ty = target
         theta = float(np.arctan2(ty - float(robot_pose[1]), tx - float(robot_pose[0])))

@@ -116,6 +116,13 @@ def toy_planner_proc(bridge_pair):
             proc.wait()
 
 
+def _do_reset(control_push: ZmqPushTransport, control_pull: ZmqPullTransport) -> None:
+    """Planners answer a standstill until the first Reset."""
+    control_push.send_frame(encode_frame(Reset(episode_id="ep0", initial_state=None)))
+    frame = _recv_control(control_pull)
+    assert isinstance(frame, ResetAck), f"expected ResetAck, got {frame!r}"
+
+
 def _do_handshake(control_push: ZmqPushTransport, control_pull: ZmqPullTransport) -> InitAck:
     init = Init(
         protocol_version=PROTOCOL_VERSION,
@@ -148,6 +155,7 @@ class TestObsActionCycle:
     def test_obs_action_cycle(self, toy_planner_proc):
         _, dpush, dpull, cpush, cpull = toy_planner_proc
         _do_handshake(cpush, cpull)
+        _do_reset(cpush, cpull)
 
         for i in range(5):
             obs = Obs(t_sec=100 + i, t_nanosec=i * 1000, seq=i, features={"x": float(i)})
@@ -243,6 +251,7 @@ class TestPlannerCrashPropagation:
     def test_planner_crash_propagation(self, crashy_proc):
         proc, dpush, dpull, cpush, cpull = crashy_proc
         _do_handshake(cpush, cpull)
+        _do_reset(cpush, cpull)
 
         for i in range(3):
             dpush.send_frame(encode_frame(Obs(t_sec=i, t_nanosec=0, seq=i, features={})))

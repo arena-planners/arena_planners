@@ -197,6 +197,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._dead: str | None = None
 
         self._cmd_vel_pub: rclpy.publisher.Publisher | None = None
+        self._driving = False
         self._seq: int = 0
         self._last_heartbeat_ns: int = 0
         self._heartbeat_period_s: float = 0.0
@@ -533,6 +534,7 @@ class PlannerEdgeNode(ArenaMixinNode):
 
     async def request_cancel(self) -> None:
         """Send Cancel and await CancelAck."""
+        self._driving = False
         self._send_control(Cancel())
         frame = await self._drain_until(CancelAck, timeout=self._control_ack_timeout_s)
         if not isinstance(frame, CancelAck):
@@ -545,10 +547,13 @@ class PlannerEdgeNode(ArenaMixinNode):
     ) -> None:
         """Send Reset and await ResetAck; warn if round-trip exceeds one sim step."""
         t_before = self.sim_time
+        if self._obs_manager is not None:
+            self._obs_manager.reset()
         self._send_control(Reset(episode_id=episode_id, initial_state=initial_state))
         frame = await self._drain_until(ResetAck, timeout=self._control_ack_timeout_s)
         if not isinstance(frame, ResetAck):
             raise ProtocolError(f"expected reset_ack, got {frame!r}")
+        self._driving = True
         t_after = self.sim_time
         step_s = self._interval
         elapsed = (t_after - t_before).to_seconds()
@@ -588,6 +593,9 @@ class PlannerEdgeNode(ArenaMixinNode):
 
     def _publish_action(self, action: Action, features: dict) -> None:
         if self._cmd_vel_pub is None:
+            return
+        if not self._driving:
+            self._cmd_vel_pub.publish(geometry_msgs.msg.Twist())
             return
         from arena_planners.bridge.projection import (  # noqa: PLC0415
             project_holonomic_to_diff_drive,

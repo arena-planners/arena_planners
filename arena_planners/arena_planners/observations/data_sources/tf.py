@@ -39,10 +39,13 @@ class RobotPoseTFGenerator(Generator[Pose2D]):
         self._target_frame = target_frame
         self._tf_buffer = tf2_ros.Buffer(node=node)
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, node)
-        self._last_pose = np.array((0.0, 0.0, 0.0), dtype=Pose2DType)
+        self._last_pose: Pose2D | None = None
         self._ready = False
 
-    def _generate(self, **kwargs: Any) -> Pose2D:
+    def reset(self) -> None:
+        self._last_pose = None
+
+    def _generate(self, **kwargs: Any) -> Pose2D | None:
         if not self._ready:
             try:
                 self._tf_buffer.can_transform(

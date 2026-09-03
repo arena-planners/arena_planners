@@ -2,7 +2,8 @@
 
 Each planner ships a YAML naming its sources by ROS message type or by built-in
 generator name (currently just RobotPoseTFGenerator). The pipeline subscribes,
-preprocesses, and on collect() returns the latest value per source.
+preprocesses, and on collect() returns the latest value per source. reset()
+marks every collector stale.
 
 Future sensor combination plugs in here as additional Generator subclasses (which
 already exist via the Generator base class in data_sources.base).
@@ -92,6 +93,12 @@ class Pipeline:
                 self.generator_seconds[name] = self.generator_seconds.get(name, 0.0) + time.perf_counter() - start
             out[name] = computed[id(gen)]
         return out
+
+    def reset(self) -> None:
+        for collector in {id(c): c for c in self._collectors.values()}.values():
+            collector.stale = True
+        for generator in {id(g): g for g in self._generators.values()}.values():
+            generator.reset()
 
     def shutdown(self) -> None:
         for sub in self._sub_handles:

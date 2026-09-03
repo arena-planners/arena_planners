@@ -137,6 +137,9 @@ class Generator(Generic[ProcessedDataType], DataSource):  # noqa: UP046
     @abstractmethod
     def _generate(self, **kwargs: Any) -> ProcessedDataType: ...
 
+    def reset(self) -> None:
+        return None
+
     def get_observation(self, obs_dict: dict[str, Any], **kwargs: Any) -> ProcessedDataType | None:
         deps = {k: obs_dict[k] for k in self.required_keys if k in obs_dict}
         missing = [k for k in self.required_keys if k not in obs_dict]

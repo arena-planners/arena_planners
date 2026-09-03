@@ -26,6 +26,12 @@ def _never_bound_ipc() -> str:
     return f"ipc:///tmp/never_bound_{uuid.uuid4().hex}.sock"
 
 
+def _activate(sdk: PlannerSDK) -> None:
+    """Planners answer a standstill until the first Reset."""
+    sdk._control_push.send_frame = lambda buf: None
+    sdk._handle_control(Reset(episode_id="e1", initial_state=None), None, None)
+
+
 def _make_sdk(
     *,
     action_type: str = "differential_drive",
@@ -86,6 +92,7 @@ class TestConstruction:
 class TestHandleObs:
     def test_obs_sends_action_on_data_channel(self) -> None:
         sdk = _make_sdk(action_type="differential_drive")
+        _activate(sdk)
         captured: list[bytes] = []
         sdk._data_push.send_frame = lambda buf: captured.append(buf)
 
@@ -106,6 +113,7 @@ class TestHandleObs:
 
     def test_obs_step_fn_raise_emits_error_and_reraises(self) -> None:
         sdk = _make_sdk()
+        _activate(sdk)
         captured: list[bytes] = []
         sdk._data_push.send_frame = lambda buf: captured.append(buf)
 
