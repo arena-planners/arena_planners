@@ -7,7 +7,6 @@ import contextlib
 import ctypes
 import math
 import os
-import queue
 import signal
 import subprocess
 import threading
@@ -189,7 +188,6 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._control_pull: ZmqPullTransport | None = None
         self._run_id: str = uuid.uuid4().hex
 
-        self._obs_queue: queue.Queue[bytes] = queue.Queue()
         self._action_queue: asyncio.Queue[Frame | _PlannerDiedError] = asyncio.Queue()
         self._ack_queue: asyncio.Queue[Frame] = asyncio.Queue()
         self._io_thread: threading.Thread | None = None
@@ -344,20 +342,10 @@ class PlannerEdgeNode(ArenaMixinNode):
     # ------------------------------------------------------------------
 
     def _io_loop(self) -> None:
-        """Dedicated I/O thread: drains _obs_queue to data_push, routes data_pull → action_queue,
-        control_pull → ack_queue. Heartbeats arrive on control_pull and update last-seen."""
+        """Dedicated I/O thread: routes data_pull to action_queue, control_pull to ack_queue.
+        Heartbeats arrive on control_pull and update last-seen."""
         loop = self.event_loop
         while not self._io_stop.is_set():
-            try:
-                buf = self._obs_queue.get_nowait()
-                if self._data_push is not None:
-                    self._data_push.send_frame(buf)
-            except queue.Empty:
-                pass
-            except BridgeError as exc:
-                self._mark_dead(str(exc))
-                break
-
             if self._data_pull is not None and self._data_pull.poll(timeout_ms=10):
                 try:
                     frame = decode_frame(self._data_pull.recv_frame())
@@ -401,6 +389,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         pulsing each tick with the obs stamp its action was computed for."""
         assert self._obs_manager is not None
         assert self._beat is not None
+        assert self._data_push is not None
 
         self.get_logger().info(
             f"run_loop entered interval_s={self._interval:.4f} action_timeout_s={self._action_timeout.value}"
@@ -430,7 +419,10 @@ class PlannerEdgeNode(ArenaMixinNode):
                             seq=self._seq,
                             features=features,
                         )
-                        self._obs_queue.put_nowait(encode_frame(obs_frame))
+                        try:
+                            self._data_push.send_frame(encode_frame(obs_frame))
+                        except BridgeError as exc:
+                            self._mark_dead(str(exc))
 
                         frame = await self._await_action()
                         timing["action"] += loop.time() - collected_at
