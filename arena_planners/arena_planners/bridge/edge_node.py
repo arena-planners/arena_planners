@@ -21,6 +21,7 @@ from arena_rclpy_mixins import ArenaMixinNode
 from arena_robots.lockstep_beat import LockstepBeat
 from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
+from rclpy.impl.rcutils_logger import RcutilsLogger
 
 from .protocol import (
     PROTOCOL_VERSION,
@@ -66,6 +67,37 @@ _PLANNER_THREAD_ENV = {
     "OMP_WAIT_POLICY": "PASSIVE",
 }
 _TIMING_LOG_EVERY = 100
+_WARN_FIRST_S = 1.0
+_WARN_MAX_S = 60.0
+
+
+class _Patience:
+    """One wait on the planner: warns at doubling intervals, dies past deadline_s (0 = never)."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop, logger: RcutilsLogger, what: str, deadline_s: float) -> None:
+        self._loop = loop
+        self._logger = logger
+        self._what = what
+        self._deadline_s = deadline_s
+        self._started = loop.time()
+        self._next_warn = _WARN_FIRST_S
+
+    @property
+    def elapsed(self) -> float:
+        return self._loop.time() - self._started
+
+    def slice_s(self) -> float:
+        """Seconds to block before the next check."""
+        due = self._next_warn if self._deadline_s <= 0 else min(self._next_warn, self._deadline_s)
+        return max(due - self.elapsed, 0.01)
+
+    def check(self) -> None:
+        elapsed = self.elapsed
+        if self._deadline_s > 0 and elapsed >= self._deadline_s:
+            raise _PlannerDiedError(f"no {self._what} after {elapsed:.0f}s (deadline {self._deadline_s:g}s)")
+        if elapsed >= self._next_warn:
+            self._logger.warning(f"no {self._what} after {elapsed:.0f}s, still waiting")
+            self._next_warn = elapsed + min(self._next_warn, _WARN_MAX_S)
 
 
 class _PlannerDiedError(RuntimeError):
@@ -168,6 +200,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         is_holonomic: bool = False,
         simulation_namespace: str = "",
         velocity_limits: dict[str, tuple[float, float]] | None = None,
+        deadline_s: float = 0.0,
         **kwargs: object,
     ) -> None:
         super().__init__(node_name, namespace=namespace, use_global_arguments=False, **kwargs)
@@ -179,6 +212,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._is_holonomic = bool(is_holonomic)
         self._simulation_namespace = simulation_namespace
         self._velocity_limits = velocity_limits or {}
+        self._deadline_s = float(deadline_s)
 
         self._obs_manager: Pipeline | None = None
         self._proc: PlannerProcess | None = None
@@ -199,12 +233,8 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._seq: int = 0
         self._last_heartbeat_ns: int = 0
         self._heartbeat_period_s: float = 0.0
-        self._control_ack_timeout_s: float = 5.0
 
         self._rate = self.ROSParam[float]("planner_rate_hz", 10.0)
-        self._action_timeout = self.ROSParam[float]("planner_action_timeout_s", 0.5)
-        self._action_max_misses = self.ROSParam[int]("planner_action_max_misses", 20)
-        self._init_timeout = self.ROSParam[float]("planner_init_timeout_s", 60.0)
         self._dropped_features_logged: set[str] = set()
         self._interval: float = 1.0 / self._rate.value
         self._beat: LockstepBeat | None = None
@@ -217,7 +247,6 @@ class PlannerEdgeNode(ArenaMixinNode):
         manifest = _load_manifest(self._manifest_raw)
         obs_config = manifest.get("observations") or {}
         action_type = manifest.get("action_type", "differential_drive")
-        self._control_ack_timeout_s = float(manifest.get("control_ack_timeout_s", 5.0))
 
         endpoints = generate_transport_set()
 
@@ -259,20 +288,18 @@ class PlannerEdgeNode(ArenaMixinNode):
             run_id=self._run_id,
         )
 
-        deadline = self.event_loop.time() + self._init_timeout.value
+        patience = self._patience(f"connect (command={self._planner_command!r})")
         while not self._control_push.poll(timeout_ms=200):
             if not self._proc.is_alive():
                 rc = self._proc.returncode
                 raise RuntimeError(
                     f"planner subprocess exited before connecting (returncode={rc}); command={self._planner_command!r}"
                 )
-            if self.event_loop.time() >= deadline:
-                raise TimeoutError(
-                    f"planner did not connect within {self._init_timeout.value}s; command={self._planner_command!r}"
-                )
+            patience.check()
             await asyncio.sleep(0)
         self._control_push.send_frame(encode_frame(init_frame))
 
+        patience = self._patience("init_ack")
         init_ack_buf: bytes | None = None
         while True:
             if self._control_pull.poll(timeout_ms=200):
@@ -283,11 +310,7 @@ class PlannerEdgeNode(ArenaMixinNode):
                 raise RuntimeError(
                     f"planner subprocess exited before init_ack (returncode={rc}); command={self._planner_command!r}"
                 )
-            if self.event_loop.time() >= deadline:
-                raise TimeoutError(
-                    f"planner did not send init_ack within {self._init_timeout.value}s; "
-                    f"command={self._planner_command!r}"
-                )
+            patience.check()
             await asyncio.sleep(0)
         init_ack = decode_frame(init_ack_buf)
         if not isinstance(init_ack, InitAck):
@@ -392,7 +415,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         assert self._data_push is not None
 
         self.get_logger().info(
-            f"run_loop entered interval_s={self._interval:.4f} action_timeout_s={self._action_timeout.value}"
+            f"run_loop entered interval_s={self._interval:.4f} deadline_s={self._deadline_s:g}"
         )
 
         try:
@@ -460,21 +483,16 @@ class PlannerEdgeNode(ArenaMixinNode):
             raise
 
     async def _await_action(self) -> Frame:
-        """Wait for this obs's action: each timeout warns (skipping a tick would deadlock a
-        lockstep run against the frozen sim) until planner_action_max_misses, stale actions are dropped."""
-        misses = 0
+        """Wait for this obs's action: skipping a tick would deadlock a lockstep run against the
+        frozen sim, so only the deadline or the planner process exiting ends the wait. Stale actions are dropped."""
+        patience = self._patience(f"action for obs seq={self._seq}")
         while True:
             try:
-                frame = await asyncio.wait_for(self._action_queue.get(), timeout=self._action_timeout.value)
+                frame = await asyncio.wait_for(self._action_queue.get(), timeout=patience.slice_s())
             except TimeoutError:
                 if self._dead is not None:
                     raise _PlannerDiedError(self._dead) from None
-                misses += 1
-                if misses >= self._action_max_misses.value:
-                    raise _PlannerDiedError(f"no action after {misses} misses") from None
-                self.get_logger().warning(
-                    f"no action received within {self._action_timeout.value}s (seq={self._seq}), still waiting"
-                )
+                patience.check()
                 continue
             if isinstance(frame, _PlannerDiedError):
                 raise frame
@@ -528,7 +546,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         """Send Cancel and await CancelAck."""
         self._driving = False
         self._send_control(Cancel())
-        frame = await self._drain_until(CancelAck, timeout=self._control_ack_timeout_s)
+        frame = await self._drain_until(CancelAck)
         if not isinstance(frame, CancelAck):
             raise ProtocolError(f"expected cancel_ack, got {frame!r}")
 
@@ -542,7 +560,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         if self._obs_manager is not None:
             self._obs_manager.reset()
         self._send_control(Reset(episode_id=episode_id, initial_state=initial_state))
-        frame = await self._drain_until(ResetAck, timeout=self._control_ack_timeout_s)
+        frame = await self._drain_until(ResetAck)
         if not isinstance(frame, ResetAck):
             raise ProtocolError(f"expected reset_ack, got {frame!r}")
         self._driving = True
@@ -571,14 +589,20 @@ class PlannerEdgeNode(ArenaMixinNode):
                 )
         return out
 
-    async def _drain_until(self, target: type, timeout: float) -> Frame:
-        """Wait for a frame of `target` type from the ack queue, with timeout."""
-        deadline = self.event_loop.time() + timeout
+    def _patience(self, what: str) -> _Patience:
+        return _Patience(self.event_loop, self.get_logger(), what, self._deadline_s)
+
+    async def _drain_until(self, target: type) -> Frame:
+        """Wait for a frame of `target` type from the ack queue."""
+        patience = self._patience(target.__name__)
         while True:
-            remaining = deadline - self.event_loop.time()
-            if remaining <= 0:
-                raise TimeoutError(f"timed out waiting for {target.__name__}")
-            frame = await asyncio.wait_for(self._ack_queue.get(), timeout=remaining)
+            try:
+                frame = await asyncio.wait_for(self._ack_queue.get(), timeout=patience.slice_s())
+            except TimeoutError:
+                if self._dead is not None:
+                    raise _PlannerDiedError(self._dead) from None
+                patience.check()
+                continue
             if isinstance(frame, target):
                 return frame
             self.get_logger().warning(f"discarding unexpected frame while waiting for {target.__name__}: {frame!r}")
