@@ -414,9 +414,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         assert self._beat is not None
         assert self._data_push is not None
 
-        self.get_logger().info(
-            f"run_loop entered interval_s={self._interval:.4f} deadline_s={self._deadline_s:g}"
-        )
+        self.get_logger().info(f"run_loop entered interval_s={self._interval:.4f} deadline_s={self._deadline_s:g}")
 
         try:
             with self.sim_time_rate(1.0 / self._interval) as (done, rate_events):
