@@ -3,7 +3,7 @@
 Each subdirectory is a submodule (one planner). Required files:
 
 - `planner.py`: entry point. Subscribes to the SDK bridge, runs `step()`.
-- `planner.yaml`: manifest: `action_type`, `obs_policy`, `rate_hz`, `depends`, `observations`.
+- `planner.yaml`: manifest: `action_type`, `rate_hz`, `depends`, `observations`.
 
   `action_type` is the planner's native action space and determines the `step()` return shape:
   - `differential_drive`: return `[v, omega]` (forward speed, yaw rate).

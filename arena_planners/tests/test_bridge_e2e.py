@@ -143,8 +143,8 @@ class TestInitHandshake:
     def test_init_handshake(self, toy_planner_proc):
         _, _, _, cpush, cpull = toy_planner_proc
         ack = _do_handshake(cpush, cpull)
-        assert ack.capabilities.get("obs_policy") == "lossless"
         assert isinstance(ack.capabilities, dict)
+        assert ack.capabilities.get("requires_seq_validation") is True
 
     def test_protocol_version_echoed(self, toy_planner_proc):
         _, _, _, cpush, cpull = toy_planner_proc

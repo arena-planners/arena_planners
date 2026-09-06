@@ -35,7 +35,6 @@ def _activate(sdk: PlannerSDK) -> None:
 def _make_sdk(
     *,
     action_type: str = "differential_drive",
-    obs_policy: str = "lossless",
     heartbeat_period_s: float = 0.0,
     capabilities: dict | None = None,
 ) -> PlannerSDK:
@@ -46,7 +45,7 @@ def _make_sdk(
         "ARENA_PLANNER_CTRL_ACK_ENDPOINT",
     ):
         os.environ[env] = _never_bound_ipc()
-    manifest = {"action_type": action_type, "obs_policy": obs_policy, "heartbeat_period_s": heartbeat_period_s}
+    manifest = {"action_type": action_type, "heartbeat_period_s": heartbeat_period_s}
     return PlannerSDK(manifest=manifest, capabilities=capabilities)
 
 
@@ -65,11 +64,6 @@ class TestConstruction:
     def test_init_stores_action_type(self) -> None:
         sdk = _make_sdk(action_type="omnidirectional")
         assert sdk._action_type == "omnidirectional"
-        _close(sdk)
-
-    def test_init_stores_obs_policy(self) -> None:
-        sdk = _make_sdk(obs_policy="latest_only")
-        assert sdk._obs_policy == "latest_only"
         _close(sdk)
 
     def test_init_merges_extra_capabilities(self) -> None:

@@ -45,8 +45,6 @@ from .protocol import (
     encode_frame,
 )
 from .transport import (
-    OBS_POLICY_LATEST_ONLY,
-    OBS_POLICY_LOSSLESS,
     TransportSet,
     ZmqPullTransport,
     ZmqPushTransport,
@@ -274,8 +272,8 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._proc = PlannerProcess(self._planner_command, endpoints)
         self._proc.start()
 
-        self._data_push = ZmqPushTransport(endpoints.obs.endpoint, mode="bind", obs_policy=OBS_POLICY_LOSSLESS)
-        self._data_pull = ZmqPullTransport(endpoints.action.endpoint, mode="bind", obs_policy=OBS_POLICY_LOSSLESS)
+        self._data_push = ZmqPushTransport(endpoints.obs.endpoint, mode="bind")
+        self._data_pull = ZmqPullTransport(endpoints.action.endpoint, mode="bind")
         self._control_push = ZmqPushTransport(endpoints.control.endpoint, mode="bind", control=True)
         self._control_pull = ZmqPullTransport(endpoints.ctrl_ack.endpoint, mode="bind", control=True)
 
@@ -317,15 +315,7 @@ class PlannerEdgeNode(ArenaMixinNode):
             raise ProtocolError(f"expected init_ack, got {init_ack!r}")
 
         caps: dict = init_ack.capabilities if isinstance(init_ack.capabilities, dict) else {}
-        obs_policy_str: str = caps.get("obs_policy", OBS_POLICY_LOSSLESS)
         self._heartbeat_period_s = float(caps.get("heartbeat_period_s", 0.0))
-
-        if obs_policy_str == OBS_POLICY_LATEST_ONLY:
-            self._data_push.close()
-            self._data_pull.close()
-            policy = OBS_POLICY_LATEST_ONLY
-            self._data_push = ZmqPushTransport(endpoints.obs.endpoint, mode="bind", obs_policy=policy)
-            self._data_pull = ZmqPullTransport(endpoints.action.endpoint, mode="bind", obs_policy=policy)
 
         self._io_stop.clear()
         self._io_thread = threading.Thread(target=self._io_loop, name="planner-io", daemon=True)
