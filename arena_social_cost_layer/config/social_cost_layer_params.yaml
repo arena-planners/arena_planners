@@ -1,0 +1,28 @@
+# Example: adding social_cost_layer to a nav2 local_costmap plugin chain.
+# This is NOT wired into any launch profile automatically - splice the
+# `social_cost_layer` block below into your actual local_costmap params
+# (arena_robots/arena_planners nav2 params, wherever your robot's bringup
+# defines local_costmap.plugins) and add "social_cost_layer" to the
+# `plugins` list, typically right before inflation_layer so inflation still
+# smooths its output.
+#
+# For the ANIM-off arm of a paired episode, either set `enabled: false` here
+# (verifies the delta is purely the plugin's contribution) or leave it
+# enabled and rely on `humansim.anim_enabled:=false` (verifies the delta
+# comes from the *signal*, since arena_peds will carry no gestures/
+# interaction_id either way - see humansim/arena_humansim's `anim_enabled`
+# ROS param).
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      plugins: ["obstacle_layer", "social_cost_layer", "inflation_layer"]
+
+      social_cost_layer:
+        plugin: "arena_social_cost_layer/SocialCostLayer"
+        enabled: true
+        peds_topic: "arena_peds"
+        personal_space_radius: 2.5    # meters; also used to size updateBounds
+        group_extra_radius: 1.5       # meters; extra reach for the HHI between-participants term
+        max_cost_value: 200           # stays below LETHAL_OBSTACLE(254)/INSCRIBED(253)
+        stale_timeout: 1.0            # seconds; ignore Pedestrians older than this
