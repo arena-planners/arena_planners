@@ -49,6 +49,11 @@ struct PersonalSpaceParams
   double base_amplitude = 0.5;
   double alert_amplitude = 0.75;
   double danger_amplitude = 1.0;
+  // Super-Gaussian shape exponent (see personalSpaceCost). 1.0 = standard
+  // Gaussian (bell curve, decays fastest near sigma). >1.0 flattens the peak
+  // into a plateau out to roughly sigma, then cuts off faster beyond it -
+  // more "high cost core + sharp edge", less "smooth bell".
+  double shape = 1.0;
 };
 
 /// Gaussian falloff radius (sigma, meters) for a human's personal-space term,
@@ -83,14 +88,16 @@ inline double personalSpaceAmplitude(uint8_t animation_state, const PersonalSpac
 }
 
 /// Normalized (0,1] personal-space cost at offset (dx, dy) meters from a
-/// pedestrian, given their animation_state.
+/// pedestrian, given their animation_state. Super-Gaussian: raises the usual
+/// Gaussian exponent to p.shape (1.0 = standard Gaussian; >1.0 flattens the
+/// near-center plateau and steepens the falloff past ~sigma).
 inline double personalSpaceCost(
   double dx, double dy, uint8_t animation_state, const PersonalSpaceParams & p = {})
 {
   const double sigma = personalSpaceSigma(animation_state, p);
   const double amplitude = personalSpaceAmplitude(animation_state, p);
   const double d2 = dx * dx + dy * dy;
-  return amplitude * std::exp(-d2 / (2.0 * sigma * sigma));
+  return amplitude * std::exp(-std::pow(d2 / (2.0 * sigma * sigma), p.shape));
 }
 
 /// Relative weight of the HHI group/O-space term by interaction type. Kept
@@ -136,16 +143,16 @@ inline double pointToSegmentDistSq(
 
 /// Normalized (0,1] cost of point (px,py) being inside/near the O-space
 /// spanned between two interaction participants at (ax,ay) and (bx,by):
-/// a Gaussian falloff off the connecting segment (not just off each
+/// a super-Gaussian falloff off the connecting segment (not just off each
 /// endpoint), so "passing between the two people" is penalized specifically,
-/// scaled by `interactionTypeMultiplier`.
+/// scaled by `interactionTypeMultiplier`. shape: see personalSpaceCost.
 inline double groupBetweenCost(
   double px, double py, double ax, double ay, double bx, double by,
-  uint8_t interaction_type, double sigma = 0.6)
+  uint8_t interaction_type, double sigma = 0.6, double shape = 1.0)
 {
   const double d2 = pointToSegmentDistSq(px, py, ax, ay, bx, by);
   const double amplitude = interactionTypeMultiplier(interaction_type);
-  return amplitude * std::exp(-d2 / (2.0 * sigma * sigma));
+  return amplitude * std::exp(-std::pow(d2 / (2.0 * sigma * sigma), shape));
 }
 
 }  // namespace arena_social_cost_layer

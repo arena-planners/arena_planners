@@ -21,8 +21,46 @@ local_costmap:
       social_cost_layer:
         plugin: "arena_social_cost_layer/SocialCostLayer"
         enabled: true
+        # namespace this (e.g. "${env_namespace}/arena_peds") -
+        # a bare relative name resolves under the costmap
+        # node's own private namespace, not the env's topic.
         peds_topic: "arena_peds"
-        personal_space_radius: 2.5    # meters; also used to size updateBounds
-        group_extra_radius: 1.5       # meters; extra reach for the HHI between-participants term
-        max_cost_value: 200           # stays below LETHAL_OBSTACLE(254)/INSCRIBED(253)
-        stale_timeout: 1.0            # seconds; ignore Pedestrians older than this
+        # meters; HARD outer clip - cost is exactly 0 beyond this,
+        # for every animation state. Also sizes the updateBounds/
+        # paint scan window. Decoupled from sigma (below), so
+        # widening this does not dilute the high-cost core.
+        personal_space_radius: 1.2 
+        # meters; base_sigma (IDLE/WALKING/RUNNING) falloff steepness.
+        # PANIC/THREATENING widens proportionally from here (see
+        # kAlertSigmaRatio/kDangerSigmaRatio in onInitialize), while
+        # still clipping at the same personal_space_radius above.
+        personal_space_sigma: 0.8 
+        # meters; HHI group/O-space term's HARD outer clip off the
+        # connecting segment (same role as personal_space_radius).
+        group_extra_radius: 1.6 
+        # meters; HHI group/O-space term's falloff scale.
+        group_sigma: 0.7
+        # shared "super-Gaussian" exponent for both terms. 1.0 = a
+        # standard Gaussian bell (decays fastest right around sigma).
+        # >1.0 flattens the curve into a plateau out to ~sigma (most
+        # of that reads as high cost) and steepens the cutoff past
+        # it - this is what actually widens the high-cost area, NOT
+        # cost_scale below (which stretches the whole curve toward
+        # saturation ~uniformly and washes out the gradient instead).
+        falloff_shape: 0.3
+        # clamped below LETHAL_OBSTACLE(254)/INSCRIBED(253) -
+        # values >=253 are silently equivalent to 253.
+        max_cost_value: 10 
+        stale_timeout: 1.0 # seconds; ignore Pedestrians older than this
+        # gain on the normalized (0,1] cost before max_cost_value
+        # scaling. Leave near 1.0 and use falloff_shape to widen the
+        # high-cost area; only raise this to push the peak itself to
+        # max sooner.
+        cost_scale: 0.5
+        # additive floor on the normalized cost, applied only within
+        # the radius disk/capsule (clipped - never leaks past it).
+        # Note: this layer's cost only competes with a controller's
+        # own critic weights (e.g. dwb's BaseObstacle.scale) for
+        # trajectory selection - tune that too if the robot still
+        # won't detour.
+        cost_bias: 0.6

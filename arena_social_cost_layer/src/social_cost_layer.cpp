@@ -22,20 +22,46 @@ void SocialCostLayer::onInitialize()
 
   declareParameter("enabled", rclcpp::ParameterValue(true));
   declareParameter("peds_topic", rclcpp::ParameterValue(std::string("arena_peds")));
-  declareParameter("personal_space_radius", rclcpp::ParameterValue(2.5));
-  declareParameter("group_extra_radius", rclcpp::ParameterValue(1.5));
+  declareParameter("personal_space_radius", rclcpp::ParameterValue(1.0));
+  declareParameter("personal_space_sigma", rclcpp::ParameterValue(0.35));
+  declareParameter("group_extra_radius", rclcpp::ParameterValue(1.0));
+  declareParameter("group_sigma", rclcpp::ParameterValue(0.4));
+  declareParameter("falloff_shape", rclcpp::ParameterValue(2.0));
   declareParameter("max_cost_value", rclcpp::ParameterValue(200));
   declareParameter("stale_timeout", rclcpp::ParameterValue(1.0));
+  declareParameter("cost_scale", rclcpp::ParameterValue(1.0));
+  declareParameter("cost_bias", rclcpp::ParameterValue(0.0));
 
   node->get_parameter(name_ + ".enabled", enabled_);
   node->get_parameter(name_ + ".peds_topic", peds_topic_);
   node->get_parameter(name_ + ".personal_space_radius", personal_space_radius_);
+  node->get_parameter(name_ + ".personal_space_sigma", personal_space_sigma_);
   node->get_parameter(name_ + ".group_extra_radius", group_extra_radius_);
+  node->get_parameter(name_ + ".group_sigma", group_sigma_);
+  node->get_parameter(name_ + ".falloff_shape", falloff_shape_);
   int max_cost_param = max_cost_value_;
   node->get_parameter(name_ + ".max_cost_value", max_cost_param);
   max_cost_value_ = static_cast<unsigned char>(
     std::clamp(max_cost_param, 0, static_cast<int>(nav2_costmap_2d::LETHAL_OBSTACLE) - 1));
   node->get_parameter(name_ + ".stale_timeout", stale_timeout_s_);
+  node->get_parameter(name_ + ".cost_scale", cost_scale_);
+  node->get_parameter(name_ + ".cost_bias", cost_bias_);
+
+  // personal_space_sigma_ is the base-state (IDLE/WALKING/RUNNING) sigma,
+  // decoupled from personal_space_radius_ (the hard outer clip) so widening
+  // the clip doesn't dilute the high-cost core. Alert/danger sigmas keep the
+  // same ratios the old hardcoded defaults had (0.75/0.45, 1.2/0.45) so
+  // PANIC/THREATENING still widens proportionally from this base.
+  constexpr double kAlertSigmaRatio = 0.75 / 0.45;
+  constexpr double kDangerSigmaRatio = 1.2 / 0.45;
+  personal_space_params_.base_sigma = personal_space_sigma_;
+  personal_space_params_.alert_sigma = personal_space_sigma_ * kAlertSigmaRatio;
+  personal_space_params_.danger_sigma = personal_space_sigma_ * kDangerSigmaRatio;
+  personal_space_params_.shape = falloff_shape_;
+
+  // Scan/paint window: both terms now clip at their own hard outer radius
+  // regardless of sigma/animation state, so this only needs to cover those.
+  reach_ = std::max(personal_space_radius_, group_extra_radius_);
 
   peds_sub_ = node->create_subscription<arena_people_msgs::msg::Pedestrians>(
     peds_topic_, rclcpp::SensorDataQoS(),
@@ -47,6 +73,12 @@ void SocialCostLayer::onInitialize()
     peds_sub_->get_topic_name());
 
   current_ = true;
+}
+
+unsigned char SocialCostLayer::toCellCost(double normalized_cost) const
+{
+  const double scaled = std::clamp(normalized_cost * cost_scale_ + cost_bias_, 0.0, 1.0);
+  return static_cast<unsigned char>(scaled * max_cost_value_);
 }
 
 void SocialCostLayer::pedestriansCallback(const arena_people_msgs::msg::Pedestrians::SharedPtr msg)
@@ -90,7 +122,7 @@ void SocialCostLayer::updateBounds(
     }
   }
 
-  const double reach = personal_space_radius_ + group_extra_radius_;
+  const double reach = reach_;
   for (const auto & ped : peds->pedestrians) {
     const double x = ped.pose.position.x;
     const double y = ped.pose.position.y;
@@ -147,7 +179,7 @@ void SocialCostLayer::updateCosts(
   }
 
   const double resolution = master_grid.getResolution();
-  const double reach = personal_space_radius_ + group_extra_radius_;
+  const double reach = reach_;
   const int cell_reach = static_cast<int>(std::ceil(reach / resolution));
 
   for (const auto & ped : peds->pedestrians) {
@@ -160,18 +192,23 @@ void SocialCostLayer::updateCosts(
     const int j0 = std::max(min_j, static_cast<int>(my) - cell_reach);
     const int j1 = std::min(max_j, static_cast<int>(my) + cell_reach);
 
+    // Circular clip at the hard outer radius (same for every animation state -
+    // decoupled from sigma). The scan window above is square, so without this
+    // every cell in it gets at least cost_bias_ regardless of actual distance,
+    // painting a rectangle instead of a disk.
+    const double clip_r2 = personal_space_radius_ * personal_space_radius_;
+
     for (int j = j0; j < j1; ++j) {
       for (int i = i0; i < i1; ++i) {
         double wx, wy;
         master_grid.mapToWorld(i, j, wx, wy);
         const double dx = wx - ped.pose.position.x;
         const double dy = wy - ped.pose.position.y;
-        const double cost = personalSpaceCost(dx, dy, ped.animation_state);
-        if (cost <= 0.0) {
+        if (dx * dx + dy * dy > clip_r2) {
           continue;
         }
-        const unsigned char cell_cost =
-          static_cast<unsigned char>(std::clamp(cost, 0.0, 1.0) * max_cost_value_);
+        const double cost = personalSpaceCost(dx, dy, ped.animation_state, personal_space_params_);
+        const unsigned char cell_cost = toCellCost(cost);
         const unsigned char existing = master_grid.getCost(i, j);
         if (existing == nav2_costmap_2d::NO_INFORMATION || cell_cost > existing) {
           master_grid.setCost(i, j, cell_cost);
@@ -204,17 +241,20 @@ void SocialCostLayer::updateCosts(
         const int j0 = std::max(min_j, static_cast<int>(std::min(my0, my1)) - cell_reach);
         const int j1 = std::min(max_j, static_cast<int>(std::max(my0, my1)) + cell_reach);
 
+        // Same clip as the personal-space term above, capsule-shaped (off the
+        // segment) and at the hard outer radius, decoupled from group_sigma_.
+        const double clip_r2 = group_extra_radius_ * group_extra_radius_;
+
         for (int j = j0; j < j1; ++j) {
           for (int i = i0; i < i1; ++i) {
             double wx, wy;
             master_grid.mapToWorld(i, j, wx, wy);
-            const double cost = groupBetweenCost(
-              wx, wy, pa.x, pa.y, pb.x, pb.y, interaction_type);
-            if (cost <= 0.0) {
+            if (pointToSegmentDistSq(wx, wy, pa.x, pa.y, pb.x, pb.y) > clip_r2) {
               continue;
             }
-            const unsigned char cell_cost =
-              static_cast<unsigned char>(std::clamp(cost, 0.0, 1.0) * max_cost_value_);
+            const double cost = groupBetweenCost(
+              wx, wy, pa.x, pa.y, pb.x, pb.y, interaction_type, group_sigma_, falloff_shape_);
+            const unsigned char cell_cost = toCellCost(cost);
             const unsigned char existing = master_grid.getCost(i, j);
             if (existing == nav2_costmap_2d::NO_INFORMATION || cell_cost > existing) {
               master_grid.setCost(i, j, cell_cost);
