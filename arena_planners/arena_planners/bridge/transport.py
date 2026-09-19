@@ -12,12 +12,8 @@ import zmq
 
 from .protocol import BridgeError
 
-OBS_POLICY_LOSSLESS = "lossless"
-OBS_POLICY_LATEST_ONLY = "latest_only"
-
-ObsPolicy = typing.Literal["lossless", "latest_only"]
-
 _CONTROL_HWM = 16
+_DATA_HWM = 1024
 _SEND_TIMEOUT_MS = 1000
 
 
@@ -44,8 +40,7 @@ class TransportEndpoint:
 @dataclass(frozen=True)
 class TransportSet:
     """Four endpoints: data (obs/action) carry tick-rate traffic, control (ctrl/ctrl_ack)
-    carry session frames. Control channel is always lossless; data channel honours
-    obs_policy."""
+    carry session frames."""
 
     obs: TransportEndpoint
     action: TransportEndpoint
@@ -71,32 +66,17 @@ def generate_transport_set(kind: typing.Literal["ipc", "tcp"] | None = None) -> 
     )
 
 
-def _apply_data_policy(sock: zmq.Socket, obs_policy: ObsPolicy) -> None:
-    if obs_policy == OBS_POLICY_LATEST_ONLY:
-        sock.set(zmq.SNDHWM, 1)
-        sock.set(zmq.RCVHWM, 1)
-        sock.set(zmq.CONFLATE, 1)
-    else:
-        sock.set(zmq.SNDHWM, 1024)
-        sock.set(zmq.RCVHWM, 1024)
-
-
-def _apply_control_policy(sock: zmq.Socket) -> None:
-    sock.set(zmq.SNDHWM, _CONTROL_HWM)
-    sock.set(zmq.RCVHWM, _CONTROL_HWM)
+def _apply_hwm(sock: zmq.Socket, hwm: int) -> None:
+    sock.set(zmq.SNDHWM, hwm)
+    sock.set(zmq.RCVHWM, hwm)
 
 
 class ZmqPushTransport:
-    """PUSH socket, bind or connect role selectable per instance.
-
-    `obs_policy` toggles data-channel CONFLATE; `control=True` overrides to
-    always-lossless control semantics regardless of obs_policy.
-    """
+    """PUSH socket, bind or connect role selectable per instance."""
 
     def __init__(
         self,
         endpoint: str,
-        obs_policy: ObsPolicy = OBS_POLICY_LOSSLESS,
         *,
         mode: typing.Literal["bind", "connect"] = "bind",
         control: bool = False,
@@ -106,10 +86,7 @@ class ZmqPushTransport:
         self._owned_ctx = ctx is None
         self._mode = mode
         self._sock: zmq.Socket = self._ctx.socket(zmq.PUSH)
-        if control:
-            _apply_control_policy(self._sock)
-        else:
-            _apply_data_policy(self._sock, obs_policy)
+        _apply_hwm(self._sock, _CONTROL_HWM if control else _DATA_HWM)
         if mode == "bind":
             self._sock.bind(endpoint)
             self._bound_endpoint: str | None = self._sock.getsockopt_string(zmq.LAST_ENDPOINT)
@@ -160,7 +137,6 @@ class ZmqPullTransport:
     def __init__(
         self,
         endpoint: str,
-        obs_policy: ObsPolicy = OBS_POLICY_LOSSLESS,
         *,
         mode: typing.Literal["bind", "connect"] = "connect",
         control: bool = False,
@@ -170,10 +146,7 @@ class ZmqPullTransport:
         self._owned_ctx = ctx is None
         self._mode = mode
         self._sock: zmq.Socket = self._ctx.socket(zmq.PULL)
-        if control:
-            _apply_control_policy(self._sock)
-        else:
-            _apply_data_policy(self._sock, obs_policy)
+        _apply_hwm(self._sock, _CONTROL_HWM if control else _DATA_HWM)
         if mode == "bind":
             self._sock.bind(endpoint)
             self._bound_endpoint: str | None = self._sock.getsockopt_string(zmq.LAST_ENDPOINT)

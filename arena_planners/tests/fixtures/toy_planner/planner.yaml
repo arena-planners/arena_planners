@@ -1,5 +1,4 @@
 action_type: differential_drive
-obs_policy: lossless
 
 observations:
   aliases:

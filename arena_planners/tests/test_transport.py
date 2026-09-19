@@ -170,43 +170,6 @@ def test_send_without_peer_raises_bridge_error(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# obs_policy: latest_only uses CONFLATE
-# ---------------------------------------------------------------------------
-
-
-def test_latest_only_policy_receives_last_frame(tmp_path):
-    """With latest_only, only the most recently enqueued frame should survive."""
-    sock_path = tmp_path / "conflate.sock"
-    endpoint = f"ipc://{sock_path}"
-
-    ctx = zmq.Context()
-    try:
-        push = ZmqPushTransport(endpoint, obs_policy="latest_only", ctx=ctx)
-        pull = ZmqPullTransport(push.bound_endpoint, obs_policy="latest_only", ctx=ctx)
-
-        # Give ZMQ time to finish the connect handshake before sending
-        time.sleep(0.05)
-
-        push.send_frame(b"frame-1")
-        push.send_frame(b"frame-2")
-        push.send_frame(b"frame-3")
-
-        # Allow the frames to propagate
-        time.sleep(0.05)
-
-        assert pull.poll(RECV_TIMEOUT_MS), "recv timed out"
-        received = pull.recv_frame()
-
-        push.close()
-        pull.close()
-    finally:
-        ctx.term()
-
-    # With CONFLATE=1 only the last frame survives
-    assert received == b"frame-3"
-
-
-# ---------------------------------------------------------------------------
 # mode parameter: PUSH-connect / PULL-bind (roles reversed)
 # ---------------------------------------------------------------------------
 

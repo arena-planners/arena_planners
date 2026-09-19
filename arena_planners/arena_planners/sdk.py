@@ -65,13 +65,12 @@ class PlannerSDK:
         self._action_type: str = manifest["action_type"]
         if self._action_type not in KNOWN_ACTION_TYPES:
             raise ValueError(f"manifest action_type {self._action_type!r} not in {sorted(KNOWN_ACTION_TYPES)}")
-        self._obs_policy: str = manifest.get("obs_policy", "lossless")
         self._heartbeat_period_s: float = float(manifest.get("heartbeat_period_s", _DEFAULT_HEARTBEAT_PERIOD_S))
         self._extra_capabilities = capabilities or {}
 
         obs_ep, action_ep, control_ep, ctrl_ack_ep = endpoints_from_env()
-        self._data_pull = ZmqPullTransport(obs_ep, self._obs_policy, mode="connect")
-        self._data_push = ZmqPushTransport(action_ep, self._obs_policy, mode="connect")
+        self._data_pull = ZmqPullTransport(obs_ep, mode="connect")
+        self._data_push = ZmqPushTransport(action_ep, mode="connect")
         self._control_pull = ZmqPullTransport(control_ep, mode="connect", control=True)
         self._control_push = ZmqPushTransport(ctrl_ack_ep, mode="connect", control=True)
 
@@ -205,7 +204,6 @@ class PlannerSDK:
                 f"protocol_version mismatch: expected {PROTOCOL_VERSION}, got {init_frame.protocol_version}"
             )
         caps: dict = {
-            "obs_policy": self._obs_policy,
             "heartbeat_period_s": self._heartbeat_period_s,
             "streaming_actions": False,
             "supports_hot_reload": False,

@@ -51,10 +51,10 @@ def test_init_roundtrip():
 
 
 def test_init_ack_roundtrip():
-    frame = InitAck(capabilities={"obs_policy": "lossless", "supports_reset": True})
+    frame = InitAck(capabilities={"streaming_actions": False, "supports_reset": True})
     result = _roundtrip(frame)
     assert result.op == "init_ack"
-    assert result.capabilities == {"obs_policy": "lossless", "supports_reset": True}
+    assert result.capabilities == {"streaming_actions": False, "supports_reset": True}
 
 
 def test_reset_roundtrip():
