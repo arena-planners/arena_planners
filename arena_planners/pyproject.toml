@@ -13,6 +13,7 @@ dependencies = [
     "numpy",
     "pyyaml",
 ]
+dynamic = ["scripts"]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
