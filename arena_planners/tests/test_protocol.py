@@ -119,6 +119,17 @@ def test_action_roundtrip():
     assert result.action == [0.5, 0.0, 0.2]
 
 
+def test_action_signal_roundtrip():
+    result = _roundtrip(Action(seq=3, action_type="differential_drive", action=[0.0, 0.0], signal="arrived"))
+    assert result.signal == "arrived"
+
+
+def test_action_without_signal_key_decodes_as_no_signal():
+    raw = {"op": "action", "seq": 2, "action_type": "differential_drive", "action": [0.1, 0.0]}
+    result = decode_frame(msgpack.packb(raw, use_bin_type=True))
+    assert result.signal == ""
+
+
 def test_action_omnidirectional():
     frame = Action(
         t_sec=1,

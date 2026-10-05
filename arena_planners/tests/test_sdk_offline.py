@@ -3,23 +3,30 @@
 from __future__ import annotations
 
 import os
+import threading
 import uuid
 
 import pytest
 
 from arena_planners.bridge.protocol import (
+    PROTOCOL_VERSION,
     Action,
+    Bye,
     Cancel,
     CancelAck,
     Error,
+    Init,
+    InitAck,
     Obs,
     ProtocolError,
     Reset,
     ResetAck,
     Shutdown,
     decode_frame,
+    encode_frame,
 )
-from arena_planners.sdk import PlannerSDK
+from arena_planners.bridge.transport import ZmqPullTransport, ZmqPushTransport
+from arena_planners.sdk import PlannerSDK, Step
 
 
 def _never_bound_ipc() -> str:
@@ -185,3 +192,71 @@ class TestHandleControl:
         keep_going = sdk._handle_control(Error(code="boom", msg="x", severity="warn"), None, None)
         _close(sdk)
         assert keep_going is True
+
+
+def _edge_sockets(tmp_path) -> dict:
+    endpoints = {
+        "ARENA_PLANNER_OBS_ENDPOINT": f"ipc://{tmp_path}/obs.sock",
+        "ARENA_PLANNER_ACTION_ENDPOINT": f"ipc://{tmp_path}/action.sock",
+        "ARENA_PLANNER_CONTROL_ENDPOINT": f"ipc://{tmp_path}/control.sock",
+        "ARENA_PLANNER_CTRL_ACK_ENDPOINT": f"ipc://{tmp_path}/ctrl_ack.sock",
+    }
+    os.environ.update(endpoints)
+    return {
+        "obs": ZmqPushTransport(endpoints["ARENA_PLANNER_OBS_ENDPOINT"], mode="bind"),
+        "action": ZmqPullTransport(endpoints["ARENA_PLANNER_ACTION_ENDPOINT"], mode="bind"),
+        "control": ZmqPushTransport(endpoints["ARENA_PLANNER_CONTROL_ENDPOINT"], mode="bind", control=True),
+        "ctrl_ack": ZmqPullTransport(endpoints["ARENA_PLANNER_CTRL_ACK_ENDPOINT"], mode="bind", control=True),
+    }
+
+
+def _recv(transport: ZmqPullTransport) -> object:
+    assert transport.poll(2000)
+    return decode_frame(transport.recv_frame())
+
+
+class TestPlannerConfig:
+    def test_init_planner_config_reaches_on_init(self, tmp_path) -> None:
+        edge = _edge_sockets(tmp_path)
+        sdk = PlannerSDK(manifest={"action_type": "differential_drive", "heartbeat_period_s": 0.0})
+        received: list[dict] = []
+        thread = threading.Thread(target=sdk.run, args=(lambda _f: [0.0, 0.0],), kwargs={"on_init": received.append})
+        thread.start()
+        config = {"device": "cpu", "max_linear": 0.3}
+        try:
+            edge["control"].send_frame(encode_frame(Init(protocol_version=PROTOCOL_VERSION, planner_config=config)))
+            assert isinstance(_recv(edge["ctrl_ack"]), InitAck)
+            edge["control"].send_frame(encode_frame(Shutdown()))
+            assert isinstance(_recv(edge["ctrl_ack"]), Bye)
+            thread.join(timeout=2.0)
+        finally:
+            for transport in edge.values():
+                transport.close()
+        assert not thread.is_alive()
+        assert received == [config]
+        assert sdk.planner_config == config
+
+
+class TestSignal:
+    @pytest.mark.parametrize(("result", "signal"), [(Step([0.0, 0.0], signal="arrived"), "arrived"), ([0.1, 0.0], "")])
+    def test_step_result_sets_action_signal(self, tmp_path, result: object, signal: str) -> None:
+        edge = _edge_sockets(tmp_path)
+        sdk = PlannerSDK(manifest={"action_type": "differential_drive", "heartbeat_period_s": 0.0})
+        thread = threading.Thread(target=sdk.run, args=(lambda _f: result,))
+        thread.start()
+        try:
+            edge["control"].send_frame(encode_frame(Init(protocol_version=PROTOCOL_VERSION)))
+            assert isinstance(_recv(edge["ctrl_ack"]), InitAck)
+            edge["control"].send_frame(encode_frame(Reset(episode_id="e1")))
+            assert isinstance(_recv(edge["ctrl_ack"]), ResetAck)
+            edge["obs"].send_frame(encode_frame(Obs(seq=1, features={})))
+            action = _recv(edge["action"])
+            edge["control"].send_frame(encode_frame(Shutdown()))
+            assert isinstance(_recv(edge["ctrl_ack"]), Bye)
+            thread.join(timeout=2.0)
+        finally:
+            for transport in edge.values():
+                transport.close()
+        assert isinstance(action, Action)
+        assert action.seq == 1
+        assert action.signal == signal

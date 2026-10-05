@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import pathlib
 import time
@@ -43,6 +44,14 @@ _ACTION_DIMS: dict[str, int] = {"differential_drive": 2, "omnidirectional": 3}
 _DEFAULT_HEARTBEAT_PERIOD_S: float = 1.0
 
 
+@dataclasses.dataclass
+class Step:
+    """A `step()` result that can also send Arena a signal such as "arrived"."""
+
+    action: list[float]
+    signal: str = ""
+
+
 def load_manifest(path: str | pathlib.Path) -> dict:
     """Load a planner.yaml manifest as a dict."""
     with open(path) as fh:
@@ -78,9 +87,15 @@ class PlannerSDK:
         self._poller.register(self._data_pull.sock, zmq.POLLIN)
         self._poller.register(self._control_pull.sock, zmq.POLLIN)
 
+        self._planner_config: dict = {}
         self._heartbeat_seq: int = 0
         self._last_heartbeat_ns: int = 0
         self._active = False
+
+    @property
+    def planner_config(self) -> dict:
+        """The manifest's `config` block with launch overrides, as received at Init."""
+        return self._planner_config
 
     def _send_control(self, frame: Frame) -> None:
         self._control_push.send_frame(encode_frame(frame))
@@ -100,7 +115,7 @@ class PlannerSDK:
     def _handle_obs(
         self,
         frame: Obs,
-        step_fn: typing.Callable[[dict], list[float]],
+        step_fn: typing.Callable[[dict], list[float] | Step],
     ) -> None:
         if not self._active:
             standstill = [0.0] * _ACTION_DIMS[self._action_type]
@@ -119,13 +134,15 @@ class PlannerSDK:
         except Exception as exc:
             self._send_data(Error(code="step_failed", msg=str(exc), severity="error"))
             raise
+        step = result if isinstance(result, Step) else Step(result)
         self._send_data(
             Action(
                 t_sec=frame.t_sec,
                 t_nanosec=frame.t_nanosec,
                 seq=frame.seq,
                 action_type=self._action_type,
-                action=result,
+                action=step.action,
+                signal=step.signal,
             )
         )
 
@@ -161,13 +178,16 @@ class PlannerSDK:
 
     def run(
         self,
-        step_fn: typing.Callable[[dict], list[float]],
+        step_fn: typing.Callable[[dict], list[float] | Step],
         on_reset: typing.Callable[[str, dict | None], None] | None = None,
         on_cancel: typing.Callable[[], None] | None = None,
+        on_init: typing.Callable[[dict], None] | None = None,
     ) -> None:
         """Blocking event loop. Returns when a Shutdown frame is received."""
         try:
             self._handshake()
+            if on_init is not None:
+                on_init(self._planner_config)
             while True:
                 self._emit_heartbeat_if_due()
                 events = dict(self._poller.poll(timeout=100))
@@ -203,6 +223,7 @@ class PlannerSDK:
             raise ProtocolError(
                 f"protocol_version mismatch: expected {PROTOCOL_VERSION}, got {init_frame.protocol_version}"
             )
+        self._planner_config = dict(init_frame.planner_config)
         caps: dict = {
             "heartbeat_period_s": self._heartbeat_period_s,
             "streaming_actions": False,
@@ -214,11 +235,14 @@ class PlannerSDK:
 
 
 def main_loop(
-    step_fn: typing.Callable[[dict], list[float]],
+    step_fn: typing.Callable[[dict], list[float] | Step],
     manifest: dict,
     on_reset: typing.Callable[[str, dict | None], None] | None = None,
     on_cancel: typing.Callable[[], None] | None = None,
     capabilities: dict | None = None,
+    on_init: typing.Callable[[dict], None] | None = None,
 ) -> None:
     """One-liner entry point."""
-    PlannerSDK(manifest=manifest, capabilities=capabilities).run(step_fn, on_reset=on_reset, on_cancel=on_cancel)
+    PlannerSDK(manifest=manifest, capabilities=capabilities).run(
+        step_fn, on_reset=on_reset, on_cancel=on_cancel, on_init=on_init
+    )

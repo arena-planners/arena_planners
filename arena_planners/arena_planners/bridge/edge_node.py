@@ -228,6 +228,7 @@ class PlannerEdgeNode(ArenaMixinNode):
 
         self._cmd_vel_pub: rclpy.publisher.Publisher | None = None
         self._driving = False
+        self._signal = ""
         self._seq: int = 0
         self._last_heartbeat_ns: int = 0
         self._heartbeat_period_s: float = 0.0
@@ -282,7 +283,7 @@ class PlannerEdgeNode(ArenaMixinNode):
             schema_version=SCHEMA_VERSION,
             obs_schema=obs_config,
             action_schema={"action_type": action_type},
-            planner_config={},
+            planner_config=manifest.get("config") or {},
             run_id=self._run_id,
         )
 
@@ -551,6 +552,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         frame = await self._drain_until(ResetAck)
         if not isinstance(frame, ResetAck):
             raise ProtocolError(f"expected reset_ack, got {frame!r}")
+        self._signal = ""
         self._driving = True
         t_after = self.sim_time
         step_s = self._interval
@@ -595,7 +597,14 @@ class PlannerEdgeNode(ArenaMixinNode):
                 return frame
             self.get_logger().warning(f"discarding unexpected frame while waiting for {target.__name__}: {frame!r}")
 
+    @property
+    def signal(self) -> str:
+        """Latest signal the planner sent since the last reset, empty if none."""
+        return self._signal
+
     def _publish_action(self, action: Action, features: dict) -> None:
+        if action.signal:
+            self._signal = action.signal
         if self._cmd_vel_pub is None:
             return
         if not self._driving:

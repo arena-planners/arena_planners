@@ -81,6 +81,7 @@ class Action:
     seq: int = 0
     action_type: str = ""
     action: list[float] = dataclasses.field(default_factory=list)
+    signal: str = ""  # planner signal to Arena such as "arrived", empty = none
 
 
 @dataclasses.dataclass(frozen=False)
