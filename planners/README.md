@@ -3,7 +3,7 @@
 Each subdirectory is a submodule (one planner). Required files:
 
 - `planner.py`: entry point. Subscribes to the SDK bridge, runs `step()`.
-- `planner.yaml`: manifest: `action_type`, `rate_hz`, `depends`, `observations`, `config`, and `goal_inputs` for VLA planners.
+- `planner.yaml`: manifest: `action_type`, `rate_hz`, `depends`, `observations`, `config`, `goal_inputs` for VLA planners, and `primitives` for discrete planners.
 
   `config` is a free-form mapping the planner receives at Init as `planner_config`, through `main_loop(..., on_init=fn)` or `PlannerSDK.planner_config`. `robot.mobile.config.<key>:=<value>` overrides a key per launch.
 
@@ -16,6 +16,7 @@ Each subdirectory is a submodule (one planner). Required files:
   `action_type` is the planner's native action space and determines the `step()` return shape:
   - `differential_drive`: return `[v, omega]` (forward speed, yaw rate).
   - `omnidirectional`: return `[vx, vy]` or `[vx, vy, omega]` in the world frame (omega defaults to 0).
+  - `discrete` (VLN-CE style): return `Step(command="forward"|"left"|"right")`, or `Step()` to hold still. Any other command or a plain list fails the step. `primitives: {forward_m: 0.25, turn_deg: 15.0}` (the defaults) sizes the moves, and the manifest must declare a `robot_pose` datasource of type `RobotPoseTFGenerator`. The bridge runs each move closed-loop on that pose at up to 0.5 m/s and 1 rad/s (lower when the robot's velocity limits are), and sends the next observation only once the move ends: on reaching the target within 2 cm or 1 degree, or at a timeout of three times the nominal duration plus 1 s, which a blocked move runs into.
 
   `rate_hz` is the tick the policy was trained at (default 10); `robot.mobile.rate:=` overrides it.
 

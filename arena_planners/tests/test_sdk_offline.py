@@ -78,6 +78,11 @@ class TestConstruction:
         assert sdk._extra_capabilities == {"model": "drlvo"}
         _close(sdk)
 
+    def test_init_accepts_discrete(self) -> None:
+        sdk = _make_sdk(action_type="discrete")
+        assert sdk._action_type == "discrete"
+        _close(sdk)
+
     def test_init_rejects_unknown_action_type(self) -> None:
         for env in (
             "ARENA_PLANNER_OBS_ENDPOINT",
@@ -260,3 +265,99 @@ class TestSignal:
         assert isinstance(action, Action)
         assert action.seq == 1
         assert action.signal == signal
+
+
+def test_step_defaults() -> None:
+    assert Step() == Step(action=[], command="", signal="")
+    assert Step([0.1, 0.2], signal="arrived") == Step(action=[0.1, 0.2], command="", signal="arrived")
+
+
+class TestDiscrete:
+    @staticmethod
+    def _connect(tmp_path, action_type: str = "discrete") -> tuple[dict, PlannerSDK]:
+        edge = _edge_sockets(tmp_path)
+        return edge, PlannerSDK(manifest={"action_type": action_type, "heartbeat_period_s": 0.0})
+
+    @staticmethod
+    def _close_all(edge: dict, sdk: PlannerSDK) -> None:
+        _close(sdk)
+        for transport in edge.values():
+            transport.close()
+
+    def _reset(self, edge: dict, sdk: PlannerSDK) -> None:
+        sdk._handle_control(Reset(episode_id="e1"), None, None)
+        assert isinstance(_recv(edge["ctrl_ack"]), ResetAck)
+
+    def test_inactive_standstill_is_empty_hold(self, tmp_path) -> None:
+        edge, sdk = self._connect(tmp_path)
+        try:
+            sdk._handle_obs(Obs(seq=4, features={}), lambda _f: Step(command="forward"))
+            action = _recv(edge["action"])
+        finally:
+            self._close_all(edge, sdk)
+        assert isinstance(action, Action)
+        assert (action.seq, action.action_type, action.action, action.command) == (4, "discrete", [], "")
+
+    @pytest.mark.parametrize(
+        ("step", "command", "signal"),
+        [
+            (Step(command="forward"), "forward", ""),
+            (Step(command="left"), "left", ""),
+            (Step(command="right"), "right", ""),
+            (Step(signal="arrived"), "", "arrived"),
+        ],
+    )
+    def test_command_reaches_action(self, tmp_path, step: Step, command: str, signal: str) -> None:
+        edge, sdk = self._connect(tmp_path)
+        try:
+            self._reset(edge, sdk)
+            sdk._handle_obs(Obs(seq=7, features={}), lambda _f: step)
+            action = _recv(edge["action"])
+        finally:
+            self._close_all(edge, sdk)
+        assert isinstance(action, Action)
+        assert (action.seq, action.action_type, action.action) == (7, "discrete", [])
+        assert (action.command, action.signal) == (command, signal)
+
+    @pytest.mark.parametrize(
+        ("action_type", "result", "error"),
+        [
+            ("discrete", Step(command="jump"), ValueError),
+            ("discrete", Step(command="Forward"), ValueError),
+            ("discrete", [0.0, 0.0], TypeError),
+            ("discrete", Step([0.1, 0.0], command="forward"), ValueError),
+            ("differential_drive", Step([0.1, 0.0], command="forward"), ValueError),
+        ],
+    )
+    def test_invalid_result_is_step_failure(self, tmp_path, action_type: str, result: object, error: type) -> None:
+        edge, sdk = self._connect(tmp_path, action_type)
+        try:
+            self._reset(edge, sdk)
+            with pytest.raises(error):
+                sdk._handle_obs(Obs(seq=1, features={}), lambda _f: result)
+            frame = _recv(edge["action"])
+        finally:
+            self._close_all(edge, sdk)
+        assert isinstance(frame, Error)
+        assert frame.code == "step_failed"
+
+    def test_run_loop_sends_command(self, tmp_path) -> None:
+        edge, sdk = self._connect(tmp_path)
+        thread = threading.Thread(target=sdk.run, args=(lambda _f: Step(command="right"),))
+        thread.start()
+        try:
+            edge["control"].send_frame(encode_frame(Init(protocol_version=PROTOCOL_VERSION)))
+            assert isinstance(_recv(edge["ctrl_ack"]), InitAck)
+            edge["control"].send_frame(encode_frame(Reset(episode_id="e1")))
+            assert isinstance(_recv(edge["ctrl_ack"]), ResetAck)
+            edge["obs"].send_frame(encode_frame(Obs(seq=1, features={"robot_pose": [0.0, 0.0, 0.0]})))
+            action = _recv(edge["action"])
+            edge["control"].send_frame(encode_frame(Shutdown()))
+            assert isinstance(_recv(edge["ctrl_ack"]), Bye)
+            thread.join(timeout=2.0)
+        finally:
+            for transport in edge.values():
+                transport.close()
+        assert not thread.is_alive()
+        assert isinstance(action, Action)
+        assert (action.action_type, action.action, action.command) == ("discrete", [], "right")

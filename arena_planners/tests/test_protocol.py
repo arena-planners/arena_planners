@@ -130,6 +130,20 @@ def test_action_without_signal_key_decodes_as_no_signal():
     assert result.signal == ""
 
 
+def test_action_command_roundtrip():
+    result = _roundtrip(Action(seq=5, action_type="discrete", command="left", signal="arrived"))
+    assert result.action_type == "discrete"
+    assert result.command == "left"
+    assert result.action == []
+    assert result.signal == "arrived"
+
+
+def test_action_without_command_key_decodes_as_hold():
+    raw = {"op": "action", "seq": 2, "action_type": "discrete", "action": []}
+    result = decode_frame(msgpack.packb(raw, use_bin_type=True))
+    assert result.command == ""
+
+
 def test_action_omnidirectional():
     frame = Action(
         t_sec=1,

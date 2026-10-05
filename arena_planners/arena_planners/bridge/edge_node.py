@@ -23,6 +23,15 @@ from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
 from rclpy.impl.rcutils_logger import RcutilsLogger
 
+from .discrete import (
+    COMMANDS,
+    Limits,
+    Move,
+    Primitives,
+    primitives_from_manifest,
+    start_move,
+    step_move,
+)
 from .protocol import (
     PROTOCOL_VERSION,
     SCHEMA_VERSION,
@@ -211,6 +220,9 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._simulation_namespace = simulation_namespace
         self._velocity_limits = velocity_limits or {}
         self._deadline_s = float(deadline_s)
+        self._primitives = Primitives()
+        self._move_limits = Limits.from_velocity_limits(self._velocity_limits)
+        self._move: Move | None = None
 
         self._obs_manager: Pipeline | None = None
         self._proc: PlannerProcess | None = None
@@ -246,6 +258,8 @@ class PlannerEdgeNode(ArenaMixinNode):
         manifest = _load_manifest(self._manifest_raw)
         obs_config = manifest.get("observations") or {}
         action_type = manifest.get("action_type", "differential_drive")
+        if action_type == "discrete":
+            self._primitives = primitives_from_manifest(manifest)
 
         endpoints = generate_transport_set()
 
@@ -421,6 +435,10 @@ class PlannerEdgeNode(ArenaMixinNode):
 
                         t = self.sim_time
                         features = self._filter_wire_features(self._obs_manager.collect())
+                        if self._move is not None and self._advance_move(features, t.to_seconds()):
+                            self._beat.pulse(stamp=t.to_msg())
+                            pulsed_at = loop.time()
+                            continue
                         self._seq += 1
                         collected_at = loop.time()
                         timing["collect"] += collected_at - tick_start
@@ -534,6 +552,7 @@ class PlannerEdgeNode(ArenaMixinNode):
     async def request_cancel(self) -> None:
         """Send Cancel and await CancelAck."""
         self._driving = False
+        self._move = None
         self._send_control(Cancel())
         frame = await self._drain_until(CancelAck)
         if not isinstance(frame, CancelAck):
@@ -546,6 +565,7 @@ class PlannerEdgeNode(ArenaMixinNode):
     ) -> None:
         """Send Reset and await ResetAck; warn if round-trip exceeds one sim step."""
         t_before = self.sim_time
+        self._move = None
         if self._obs_manager is not None:
             self._obs_manager.reset()
         self._send_control(Reset(episode_id=episode_id, initial_state=initial_state))
@@ -610,6 +630,9 @@ class PlannerEdgeNode(ArenaMixinNode):
         if not self._driving:
             self._cmd_vel_pub.publish(geometry_msgs.msg.Twist())
             return
+        if action.action_type == "discrete":
+            self._start_move(action.command, features)
+            return
         from arena_planners.bridge.projection import (  # noqa: PLC0415
             project_holonomic_to_diff_drive,
             unpack_differential_drive,
@@ -652,6 +675,44 @@ class PlannerEdgeNode(ArenaMixinNode):
             return
         self._clamp_to_limits(msg)
         self._cmd_vel_pub.publish(msg)
+
+    def _start_move(self, command: str, features: dict) -> None:
+        """Begin `command` and drive its first tick, or hold still for an empty or unusable command."""
+        pose = self._robot_pose(features)
+        if command in COMMANDS and pose is not None:
+            t_s = self.sim_time.to_seconds()
+            self._move = start_move(command, pose, t_s, self._primitives, self._move_limits)
+            self._advance_move(features, t_s)
+            return
+        if command not in COMMANDS and command:
+            self.get_logger().warning(f"unknown discrete command {command!r}, known: {sorted(COMMANDS)}, holding still")
+        elif command:
+            self.get_logger().warning(f"cannot start discrete {command!r}: robot_pose missing or malformed")
+        assert self._cmd_vel_pub is not None
+        self._cmd_vel_pub.publish(geometry_msgs.msg.Twist())
+
+    def _advance_move(self, features: dict, t_s: float) -> bool:
+        """Publish this tick's twist for the move in progress, True while it continues."""
+        assert self._move is not None
+        step = step_move(self._move, self._robot_pose(features), t_s)
+        if step.timed_out:
+            self.get_logger().warning(
+                f"discrete {self._move.command!r} timed out at sim t={t_s:.2f}s, ending it where the robot stands"
+            )
+        msg = geometry_msgs.msg.Twist()
+        msg.linear.x = step.v
+        msg.angular.z = step.omega
+        self._clamp_to_limits(msg)
+        if self._cmd_vel_pub is not None:
+            self._cmd_vel_pub.publish(msg)
+        if step.done:
+            self._move = None
+        return not step.done
+
+    @staticmethod
+    def _robot_pose(features: dict) -> typing.Sequence[float] | None:
+        pose = features.get("robot_pose") if features else None
+        return pose if pose is not None and len(pose) >= 3 else None
 
     def _clamp_to_limits(self, msg: geometry_msgs.msg.Twist) -> None:
         """Scale the whole twist into the velocity envelope; one factor, so curvature is preserved."""

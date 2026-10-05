@@ -11,6 +11,7 @@ import typing
 import yaml
 import zmq
 
+from arena_planners.bridge.discrete import COMMANDS
 from arena_planners.bridge.protocol import (
     PROTOCOL_VERSION,
     Action,
@@ -38,17 +39,18 @@ from arena_planners.bridge.transport import (
 
 _log = logging.getLogger(__name__)
 
-KNOWN_ACTION_TYPES: frozenset[str] = frozenset({"differential_drive", "omnidirectional"})
-_ACTION_DIMS: dict[str, int] = {"differential_drive": 2, "omnidirectional": 3}
+KNOWN_ACTION_TYPES: frozenset[str] = frozenset({"differential_drive", "omnidirectional", "discrete"})
+_ACTION_DIMS: dict[str, int] = {"differential_drive": 2, "omnidirectional": 3, "discrete": 0}
 
 _DEFAULT_HEARTBEAT_PERIOD_S: float = 1.0
 
 
 @dataclasses.dataclass
 class Step:
-    """A `step()` result that can also send Arena a signal such as "arrived"."""
+    """A `step()` result: a velocity `action` or a discrete `command`, plus an optional signal such as "arrived"."""
 
-    action: list[float]
+    action: list[float] = dataclasses.field(default_factory=list)
+    command: str = ""
     signal: str = ""
 
 
@@ -130,11 +132,10 @@ class PlannerSDK:
             )
             return
         try:
-            result = step_fn(frame.features)
+            step = self._as_step(step_fn(frame.features))
         except Exception as exc:
             self._send_data(Error(code="step_failed", msg=str(exc), severity="error"))
             raise
-        step = result if isinstance(result, Step) else Step(result)
         self._send_data(
             Action(
                 t_sec=frame.t_sec,
@@ -143,8 +144,23 @@ class PlannerSDK:
                 action_type=self._action_type,
                 action=step.action,
                 signal=step.signal,
+                command=step.command,
             )
         )
+
+    def _as_step(self, result: list[float] | Step) -> Step:
+        if self._action_type != "discrete":
+            step = result if isinstance(result, Step) else Step(result)
+            if step.command:
+                raise ValueError(f"command {step.command!r} needs action_type discrete, not {self._action_type!r}")
+            return step
+        if not isinstance(result, Step):
+            raise TypeError(f"a discrete planner must return Step(command=...), got {type(result).__name__}")
+        if result.command and result.command not in COMMANDS:
+            raise ValueError(f"discrete command {result.command!r} not in {sorted(COMMANDS)} or empty")
+        if result.action:
+            raise ValueError(f"a discrete planner sends no action vector, got {result.action!r}")
+        return result
 
     def _handle_control(
         self,
