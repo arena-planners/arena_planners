@@ -12,7 +12,7 @@ import warnings
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from arena_planners import registry
+from arena_planners import goal, registry
 
 try:
     from ament_index_python.packages import get_packages_with_prefixes as _get_packages_with_prefixes
@@ -298,6 +298,14 @@ def load_manifest(planner_name: str, *, workspace_root: Path | None = None) -> d
         return yaml.safe_load(fh) or {}
 
 
+def is_vla(planner_name: str, *, workspace_root: Path | None = None) -> bool:
+    """True if the planner's manifest declares `goal_inputs`, False when it declares none or is not checked out."""
+    manifest_path = planner_dir(planner_name, workspace_root=workspace_root) / "planner.yaml"
+    if not manifest_path.is_file():
+        return False
+    return goal.declared(load_manifest(planner_name, workspace_root=workspace_root)) is not None
+
+
 def installed_in_registry(name: str, *, workspace_root: Path | None = None) -> bool:
     """True if the planner's source is present (planner.py exists in the planners dir).
 
@@ -368,7 +376,7 @@ def resolve(name: str, *, workspace_root: Path | None = None) -> ResolvedPlanner
         return ResolvedPlanner(
             name=name,
             source="registry",
-            adapter_kind="drl",
+            adapter_kind="vla" if is_vla(name, workspace_root=root) else "drl",
             selector_key="planner",
             selector_value=name,
             package_name=_registry_package_name(name, workspace_root=root),

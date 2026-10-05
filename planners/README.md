@@ -3,7 +3,15 @@
 Each subdirectory is a submodule (one planner). Required files:
 
 - `planner.py`: entry point. Subscribes to the SDK bridge, runs `step()`.
-- `planner.yaml`: manifest: `action_type`, `rate_hz`, `depends`, `observations`.
+- `planner.yaml`: manifest: `action_type`, `rate_hz`, `depends`, `observations`, `config`, and `goal_inputs` for VLA planners.
+
+  `config` is a free-form mapping the planner receives at Init as `planner_config`, through `main_loop(..., on_init=fn)` or `PlannerSDK.planner_config`. `robot.mobile.config.<key>:=<value>` overrides a key per launch.
+
+  Each `Reset` carries `initial_state` with `goal_pose` (`x`, `y`, `theta` in the map frame). A `Reset` with `initial_state=None` starts an episode before its goal is dispatched.
+
+  `step()` may return `arena_planners.sdk.Step(action, signal="arrived")` to send Arena a signal. A planner lists the signals it can send under `signals:` in `planner.yaml`. When a goto phase expects one, the reset's `initial_state` carries it as `signal`, and the phase ends when the planner sends it.
+
+  `goal_inputs` (a subset of `[pose, instruction]`) marks a VLA planner, which runs under `robot.mobile:=vla` and only there. `robot.mobile.goal:=pose|instruction|pose+instruction` (default: all of `goal_inputs`) picks what a run reveals. `initial_state` then holds only the revealed keys, `instruction` being the goal's natural-language text (empty when the scenario gives none). Withholding `pose` also strips the bridge's `goal_pose` datasources and `SubgoalGenerator`s, and refuses planners with `depends.global_plan`.
 
   `action_type` is the planner's native action space and determines the `step()` return shape:
   - `differential_drive`: return `[v, omega]` (forward speed, yaw rate).

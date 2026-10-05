@@ -107,3 +107,45 @@
 	planner = sonic
 	branch = master
 	update = rebase
+[submodule "vln/cma"]
+	path = planners/cma
+	url = https://github.com/arena-planners/cma.git
+	planner = cma
+	branch = master
+	update = rebase
+[submodule "vln/navid"]
+	path = planners/navid
+	url = https://github.com/arena-planners/navid.git
+	planner = navid
+	branch = master
+	update = rebase
+[submodule "vln/navila"]
+	path = planners/navila
+	url = https://github.com/arena-planners/navila.git
+	planner = navila
+	branch = master
+	update = rebase
+[submodule "vln/streamvln"]
+	path = planners/streamvln
+	url = https://github.com/arena-planners/streamvln.git
+	planner = streamvln
+	branch = master
+	update = rebase
+[submodule "vla/omnivla"]
+	path = planners/omnivla
+	url = https://github.com/arena-planners/omnivla.git
+	planner = omnivla
+	branch = master
+	update = rebase
+[submodule "vla/omnivla-edge"]
+	path = planners/omnivla-edge
+	url = https://github.com/arena-planners/omnivla-edge.git
+	planner = omnivla-edge
+	branch = master
+	update = rebase
+[submodule "vla/pi05"]
+	path = planners/pi05
+	url = https://github.com/arena-planners/pi05.git
+	planner = pi05
+	branch = master
+	update = rebase

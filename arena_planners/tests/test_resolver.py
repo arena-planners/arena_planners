@@ -180,6 +180,22 @@ def test_local_only_planner_listed_and_resolvable(tmp_path):
     assert planner_dir("local_only", workspace_root=tmp_path).name == "local_only"
 
 
+def test_local_planner_declaring_goal_inputs_resolves_to_vla(tmp_path):
+    _make_local_only_workspace(tmp_path, with_planner_py=True)
+    manifest = tmp_path / "arena_planners" / "planners" / "local_only" / "planner.yaml"
+    manifest.write_text("action_type: differential_drive\ngoal_inputs: [pose, instruction]\n")
+    result = resolve("local_only", workspace_root=tmp_path)
+    assert result.adapter_kind == "vla"
+    assert result.selector_key == "planner"
+
+
+def test_local_planner_without_goal_inputs_resolves_to_drl(tmp_path):
+    _make_local_only_workspace(tmp_path, with_planner_py=True)
+    manifest = tmp_path / "arena_planners" / "planners" / "local_only" / "planner.yaml"
+    manifest.write_text("action_type: differential_drive\n")
+    assert resolve("local_only", workspace_root=tmp_path).adapter_kind == "drl"
+
+
 def test_submodule_without_planner_py_listed_but_raises_on_resolve(tmp_path):
     """A .gitmodules entry without planner.py on disk is listed but raises ResolverError."""
     (tmp_path / "arena_planners" / "planners" / "drlvo").mkdir(parents=True)
