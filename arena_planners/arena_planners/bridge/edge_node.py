@@ -23,8 +23,17 @@ from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
 from rclpy.impl.rcutils_logger import RcutilsLogger
 
+from .chunk import (
+    CHUNK_TYPES,
+    ChunkConfig,
+    VelocityChunk,
+    WaypointChunk,
+    chunk_config_from_manifest,
+    chunk_limits,
+    start_chunk,
+    step_chunk,
+)
 from .discrete import (
-    COMMANDS,
     Limits,
     Move,
     Primitives,
@@ -74,6 +83,7 @@ _PLANNER_THREAD_ENV = {
     "OMP_WAIT_POLICY": "PASSIVE",
 }
 _TIMING_LOG_EVERY = 100
+_FOLLOW_RATE_HZ = 20.0
 _WARN_FIRST_S = 1.0
 _WARN_MAX_S = 60.0
 
@@ -222,7 +232,9 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._deadline_s = float(deadline_s)
         self._primitives = Primitives()
         self._move_limits = Limits.from_velocity_limits(self._velocity_limits)
-        self._move: Move | None = None
+        self._chunk_config = ChunkConfig()
+        self._chunk_limits = chunk_limits(self._chunk_config, self._velocity_limits)
+        self._execution: Move | WaypointChunk | VelocityChunk | None = None
 
         self._obs_manager: Pipeline | None = None
         self._proc: PlannerProcess | None = None
@@ -248,6 +260,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._rate = self.ROSParam[float]("planner_rate_hz", 10.0)
         self._dropped_features_logged: set[str] = set()
         self._interval: float = 1.0 / self._rate.value
+        self._follow_interval: float = 1.0 / _FOLLOW_RATE_HZ
         self._beat: LockstepBeat | None = None
 
     # ------------------------------------------------------------------
@@ -260,6 +273,9 @@ class PlannerEdgeNode(ArenaMixinNode):
         action_type = manifest.get("action_type", "differential_drive")
         if action_type == "discrete":
             self._primitives = primitives_from_manifest(manifest)
+        elif action_type in CHUNK_TYPES:
+            self._chunk_config = chunk_config_from_manifest(manifest)
+            self._chunk_limits = chunk_limits(self._chunk_config, self._velocity_limits)
 
         endpoints = generate_transport_set()
 
@@ -281,7 +297,7 @@ class PlannerEdgeNode(ArenaMixinNode):
             simulation_ns=self._simulation_namespace,
         )
 
-        self._interval = await self._snap_interval()
+        self._interval, self._follow_interval = await self._snap_intervals()
         self._beat = LockstepBeat(self, "planner", grace_s=None, sleep=asyncio.sleep)
 
         self._proc = PlannerProcess(self._planner_command, endpoints)
@@ -424,6 +440,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         try:
             with self.sim_time_rate(1.0 / self._interval) as (done, rate_events):
                 loop = self.event_loop
+                follow = loop.create_task(self._follow_loop(done))
                 timing = {"sim": 0.0, "collect": 0.0, "action": 0.0}
                 pulsed_at = loop.time()
                 try:
@@ -435,7 +452,7 @@ class PlannerEdgeNode(ArenaMixinNode):
 
                         t = self.sim_time
                         features = self._filter_wire_features(self._obs_manager.collect())
-                        if self._move is not None and self._advance_move(features, t.to_seconds()):
+                        if self._execution is not None and self._advance_execution(features, t.to_seconds()):
                             self._beat.pulse(stamp=t.to_msg())
                             pulsed_at = loop.time()
                             continue
@@ -484,6 +501,7 @@ class PlannerEdgeNode(ArenaMixinNode):
                             timing = dict.fromkeys(timing, 0.0)
                             self._obs_manager.generator_seconds.clear()
                 finally:
+                    follow.cancel()
                     await self._beat.release()
         except BaseException as exc:
             self.get_logger().error(f"run_loop crashed: {exc!r}")
@@ -508,9 +526,20 @@ class PlannerEdgeNode(ArenaMixinNode):
                 continue
             return frame
 
-    async def _snap_interval(self) -> float:
-        """Planner tick snapped to whole physics steps so lockstep chunks and ticks coincide."""
+    async def _follow_loop(self, done: asyncio.Event) -> None:
+        """Drive the move or chunk in progress at the follow rate, so a slow planner's robot keeps its command alive."""
+        with self.sim_time_rate(1.0 / self._follow_interval) as (_, events):
+            while not done.is_set():
+                await events.get()
+                if self._execution is None:
+                    continue
+                features = self._filter_wire_features(self._obs_manager.collect())
+                self._advance_execution(features, self.sim_time.to_seconds())
+
+    async def _snap_intervals(self) -> tuple[float, float]:
+        """Planner tick and follow tick snapped to whole physics steps so lockstep chunks and ticks coincide."""
         requested = 1.0 / self._rate.value
+        follow = min(requested, 1.0 / _FOLLOW_RATE_HZ)
         client = self.create_client_wrapper(GetParameters, "/arena/get_parameters", timeout=_PHYSICS_DT_TIMEOUT_S)
         dt: float | None = None
         try:
@@ -526,14 +555,14 @@ class PlannerEdgeNode(ArenaMixinNode):
         finally:
             self.destroy_client(client.client)
         if dt is None:
-            return requested
+            return requested, follow
         interval = max(1, round(requested / dt)) * dt
         if abs(interval - requested) > 1e-9:
             self.get_logger().info(
                 f"planner_rate_hz={self._rate.value:g} snapped to {1.0 / interval:.3f} Hz "
                 f"({interval:.4f}s, physics_dt={dt:g})"
             )
-        return interval
+        return interval, max(1, round(follow / dt)) * dt
 
     # ------------------------------------------------------------------
     # Outbound control messages
@@ -552,7 +581,7 @@ class PlannerEdgeNode(ArenaMixinNode):
     async def request_cancel(self) -> None:
         """Send Cancel and await CancelAck."""
         self._driving = False
-        self._move = None
+        self._stop_execution()
         self._send_control(Cancel())
         frame = await self._drain_until(CancelAck)
         if not isinstance(frame, CancelAck):
@@ -565,7 +594,7 @@ class PlannerEdgeNode(ArenaMixinNode):
     ) -> None:
         """Send Reset and await ResetAck; warn if round-trip exceeds one sim step."""
         t_before = self.sim_time
-        self._move = None
+        self._stop_execution()
         if self._obs_manager is not None:
             self._obs_manager.reset()
         self._send_control(Reset(episode_id=episode_id, initial_state=initial_state))
@@ -631,7 +660,10 @@ class PlannerEdgeNode(ArenaMixinNode):
             self._cmd_vel_pub.publish(geometry_msgs.msg.Twist())
             return
         if action.action_type == "discrete":
-            self._start_move(action.command, features)
+            self._start_move(action.command, float(action.amount), features)
+            return
+        if action.action_type in CHUNK_TYPES:
+            self._start_chunk(action.action_type, action.chunk, features)
             return
         from arena_planners.bridge.projection import (  # noqa: PLC0415
             project_holonomic_to_diff_drive,
@@ -676,38 +708,72 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._clamp_to_limits(msg)
         self._cmd_vel_pub.publish(msg)
 
-    def _start_move(self, command: str, features: dict) -> None:
+    def _start_move(self, command: str, amount: float, features: dict) -> None:
         """Begin `command` and drive its first tick, or hold still for an empty or unusable command."""
         pose = self._robot_pose(features)
-        if command in COMMANDS and pose is not None:
-            t_s = self.sim_time.to_seconds()
-            self._move = start_move(command, pose, t_s, self._primitives, self._move_limits)
-            self._advance_move(features, t_s)
-            return
-        if command not in COMMANDS and command:
-            self.get_logger().warning(f"unknown discrete command {command!r}, known: {sorted(COMMANDS)}, holding still")
-        elif command:
+        if command and pose is None:
             self.get_logger().warning(f"cannot start discrete {command!r}: robot_pose missing or malformed")
-        assert self._cmd_vel_pub is not None
-        self._cmd_vel_pub.publish(geometry_msgs.msg.Twist())
+        elif command:
+            t_s = self.sim_time.to_seconds()
+            try:
+                move = start_move(command, pose, t_s, self._primitives, self._move_limits, amount)
+            except ValueError as exc:
+                self.get_logger().warning(f"{exc}, holding still")
+            else:
+                self._execution = move
+                self._advance_execution(features, t_s)
+                return
+        self._publish_twist(0.0, 0.0)
 
-    def _advance_move(self, features: dict, t_s: float) -> bool:
-        """Publish this tick's twist for the move in progress, True while it continues."""
-        assert self._move is not None
-        step = step_move(self._move, self._robot_pose(features), t_s)
+    def _start_chunk(self, kind: str, entries: list[list[float]], features: dict) -> None:
+        """Begin a `kind` chunk and drive its first tick, or hold still for an empty or unusable chunk."""
+        if len(entries):
+            t_s = self.sim_time.to_seconds()
+            try:
+                chunk = start_chunk(
+                    kind, entries, self._robot_pose(features), t_s, self._chunk_config, self._chunk_limits
+                )
+            except ValueError as exc:
+                self.get_logger().warning(f"cannot start {kind} chunk: {exc}, holding still")
+            else:
+                self._execution = chunk
+                self._advance_execution(features, t_s)
+                return
+        self._publish_twist(0.0, 0.0)
+
+    def _advance_execution(self, features: dict, t_s: float) -> bool:
+        """Publish this tick's twist for the move or chunk in progress, True while it continues."""
+        execution = self._execution
+        assert execution is not None
+        pose = self._robot_pose(features)
+        if isinstance(execution, Move):
+            step = step_move(execution, pose, t_s)
+            what = f"discrete {execution.command!r}"
+        else:
+            step = step_chunk(execution, pose, t_s)
+            what = f"{execution.kind} chunk"
         if step.timed_out:
-            self.get_logger().warning(
-                f"discrete {self._move.command!r} timed out at sim t={t_s:.2f}s, ending it where the robot stands"
-            )
-        msg = geometry_msgs.msg.Twist()
-        msg.linear.x = step.v
-        msg.angular.z = step.omega
-        self._clamp_to_limits(msg)
-        if self._cmd_vel_pub is not None:
-            self._cmd_vel_pub.publish(msg)
+            self.get_logger().warning(f"{what} timed out at sim t={t_s:.2f}s, ending it where the robot stands")
         if step.done:
-            self._move = None
+            self._execution = None
+        keeps_last_twist = step.done and not step.timed_out and not isinstance(execution, Move)
+        if not keeps_last_twist:
+            self._publish_twist(step.v, step.omega)
         return not step.done
+
+    def _stop_execution(self) -> None:
+        """Drop the move or chunk in progress and stop the robot."""
+        self._execution = None
+        self._publish_twist(0.0, 0.0)
+
+    def _publish_twist(self, v: float, omega: float) -> None:
+        if self._cmd_vel_pub is None:
+            return
+        msg = geometry_msgs.msg.Twist()
+        msg.linear.x = v
+        msg.angular.z = omega
+        self._clamp_to_limits(msg)
+        self._cmd_vel_pub.publish(msg)
 
     @staticmethod
     def _robot_pose(features: dict) -> typing.Sequence[float] | None:

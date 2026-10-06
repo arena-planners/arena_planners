@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import uuid
 
+import numpy as np
 import pytest
 
 from arena_planners.bridge.protocol import (
@@ -81,6 +83,12 @@ class TestConstruction:
     def test_init_accepts_discrete(self) -> None:
         sdk = _make_sdk(action_type="discrete")
         assert sdk._action_type == "discrete"
+        _close(sdk)
+
+    @pytest.mark.parametrize("action_type", ["waypoints", "velocity_chunk"])
+    def test_init_accepts_chunk_types(self, action_type: str) -> None:
+        sdk = _make_sdk(action_type=action_type)
+        assert sdk._action_type == action_type
         _close(sdk)
 
     def test_init_rejects_unknown_action_type(self) -> None:
@@ -268,8 +276,11 @@ class TestSignal:
 
 
 def test_step_defaults() -> None:
-    assert Step() == Step(action=[], command="", signal="")
+    assert Step() == Step(action=[], command="", signal="", amount=0.0, chunk=[])
     assert Step([0.1, 0.2], signal="arrived") == Step(action=[0.1, 0.2], command="", signal="arrived")
+    assert Step([0.1, 0.2], "forward", "arrived", 0.5, [[1.0, 0.0]]) == Step(
+        action=[0.1, 0.2], command="forward", signal="arrived", amount=0.5, chunk=[[1.0, 0.0]]
+    )
 
 
 class TestDiscrete:
@@ -305,6 +316,8 @@ class TestDiscrete:
             (Step(command="left"), "left", ""),
             (Step(command="right"), "right", ""),
             (Step(signal="arrived"), "", "arrived"),
+            (Step(command="forward", amount=0.75), "forward", ""),
+            (Step(command="left", amount=30), "left", ""),
         ],
     )
     def test_command_reaches_action(self, tmp_path, step: Step, command: str, signal: str) -> None:
@@ -318,6 +331,9 @@ class TestDiscrete:
         assert isinstance(action, Action)
         assert (action.seq, action.action_type, action.action) == (7, "discrete", [])
         assert (action.command, action.signal) == (command, signal)
+        assert action.amount == float(step.amount)
+        assert isinstance(action.amount, float)
+        assert action.chunk == []
 
     @pytest.mark.parametrize(
         ("action_type", "result", "error"),
@@ -327,6 +343,15 @@ class TestDiscrete:
             ("discrete", [0.0, 0.0], TypeError),
             ("discrete", Step([0.1, 0.0], command="forward"), ValueError),
             ("differential_drive", Step([0.1, 0.0], command="forward"), ValueError),
+            ("discrete", Step(command="forward", amount=-0.25), ValueError),
+            ("discrete", Step(command="left", amount=-30.0), ValueError),
+            ("discrete", Step(command="right", amount=360.0), ValueError),
+            ("discrete", Step(command="forward", amount=math.nan), ValueError),
+            ("discrete", Step(amount=0.5), ValueError),
+            ("discrete", Step(command="forward", chunk=[[0.5, 0.0]]), ValueError),
+            ("differential_drive", Step([0.1, 0.0], amount=0.5), ValueError),
+            ("differential_drive", Step([0.1, 0.0], chunk=[[0.1, 0.0]]), ValueError),
+            ("omnidirectional", Step([0.1, 0.0, 0.0], chunk=[[0.1, 0.0]]), ValueError),
         ],
     )
     def test_invalid_result_is_step_failure(self, tmp_path, action_type: str, result: object, error: type) -> None:
@@ -361,3 +386,108 @@ class TestDiscrete:
         assert not thread.is_alive()
         assert isinstance(action, Action)
         assert (action.action_type, action.action, action.command) == ("discrete", [], "right")
+
+
+class TestChunk:
+    @staticmethod
+    def _exchange(tmp_path, action_type: str, result: object) -> object:
+        edge = _edge_sockets(tmp_path)
+        sdk = PlannerSDK(manifest={"action_type": action_type, "heartbeat_period_s": 0.0})
+        try:
+            sdk._handle_control(Reset(episode_id="e1"), None, None)
+            assert isinstance(_recv(edge["ctrl_ack"]), ResetAck)
+            try:
+                sdk._handle_obs(Obs(seq=5, features={}), lambda _f: result)
+            except (TypeError, ValueError) as exc:
+                frame = _recv(edge["action"])
+                assert isinstance(frame, Error)
+                assert frame.code == "step_failed"
+                return exc
+            return _recv(edge["action"])
+        finally:
+            _close(sdk)
+            for transport in edge.values():
+                transport.close()
+
+    @pytest.mark.parametrize(
+        ("action_type", "chunk"),
+        [
+            ("waypoints", [[0.5, 0.0], [1.0, 0.2, 0.1]]),
+            ("waypoints", [(1, 2)]),
+            ("velocity_chunk", [[0.2, 0.1], [0.3, -0.1]]),
+            ("waypoints", []),
+            ("velocity_chunk", []),
+        ],
+    )
+    def test_chunk_reaches_action(self, tmp_path, action_type: str, chunk: list) -> None:
+        action = self._exchange(tmp_path, action_type, Step(chunk=chunk, signal="arrived"))
+        assert isinstance(action, Action)
+        assert (action.seq, action.action_type, action.action, action.command) == (5, action_type, [], "")
+        assert action.chunk == [[float(c) for c in entry] for entry in chunk]
+        assert all(isinstance(c, float) for entry in action.chunk for c in entry)
+        assert (action.amount, action.signal) == (0.0, "arrived")
+
+    def test_numpy_chunk_arrives_as_lists(self, tmp_path) -> None:
+        chunk = np.array([[0.5, 0.0], [1.0, 0.25]], dtype=np.float32)
+        action = self._exchange(tmp_path, "waypoints", Step(chunk=chunk))
+        assert isinstance(action, Action)
+        assert action.chunk == [[0.5, 0.0], [1.0, 0.25]]
+
+    @pytest.mark.parametrize(
+        ("action_type", "result", "error", "match"),
+        [
+            ("waypoints", [[0.5, 0.0]], TypeError, "Step"),
+            ("velocity_chunk", [0.2, 0.0], TypeError, "Step"),
+            ("waypoints", Step(command="forward"), ValueError, "command"),
+            ("velocity_chunk", Step(command="left", chunk=[[0.1, 0.0]]), ValueError, "command"),
+            ("waypoints", Step([0.1, 0.0]), ValueError, "action vector"),
+            ("waypoints", Step(chunk=[[1.0, 0.0]], amount=0.5), ValueError, "amount"),
+            ("waypoints", Step(chunk=[[1.0]]), ValueError, "yaw"),
+            ("waypoints", Step(chunk=[[1.0, 0.0, 0.0, 0.0]]), ValueError, "yaw"),
+            ("velocity_chunk", Step(chunk=[[0.1, 0.0, 0.0]]), ValueError, "omega"),
+            ("velocity_chunk", Step(chunk=[[0.1]]), ValueError, "omega"),
+            ("waypoints", Step(chunk=[[math.nan, 0.0]]), ValueError, "finite"),
+        ],
+    )
+    def test_invalid_result_is_step_failure(
+        self, tmp_path, action_type: str, result: object, error: type, match: str
+    ) -> None:
+        exc = self._exchange(tmp_path, action_type, result)
+        assert isinstance(exc, error)
+        assert match in str(exc)
+
+    @pytest.mark.parametrize("action_type", ["waypoints", "velocity_chunk"])
+    def test_inactive_standstill_is_empty_chunk(self, tmp_path, action_type: str) -> None:
+        edge = _edge_sockets(tmp_path)
+        sdk = PlannerSDK(manifest={"action_type": action_type, "heartbeat_period_s": 0.0})
+        try:
+            sdk._handle_obs(Obs(seq=4, features={}), lambda _f: Step(chunk=[[1.0, 0.0]]))
+            action = _recv(edge["action"])
+        finally:
+            _close(sdk)
+            for transport in edge.values():
+                transport.close()
+        assert isinstance(action, Action)
+        assert (action.seq, action.action_type, action.action, action.chunk) == (4, action_type, [], [])
+
+    def test_run_loop_sends_chunk(self, tmp_path) -> None:
+        edge = _edge_sockets(tmp_path)
+        sdk = PlannerSDK(manifest={"action_type": "waypoints", "heartbeat_period_s": 0.0})
+        thread = threading.Thread(target=sdk.run, args=(lambda _f: Step(chunk=[[0.3, 0.0], [0.6, 0.1]]),))
+        thread.start()
+        try:
+            edge["control"].send_frame(encode_frame(Init(protocol_version=PROTOCOL_VERSION)))
+            assert isinstance(_recv(edge["ctrl_ack"]), InitAck)
+            edge["control"].send_frame(encode_frame(Reset(episode_id="e1")))
+            assert isinstance(_recv(edge["ctrl_ack"]), ResetAck)
+            edge["obs"].send_frame(encode_frame(Obs(seq=1, features={"robot_pose": [0.0, 0.0, 0.0]})))
+            action = _recv(edge["action"])
+            edge["control"].send_frame(encode_frame(Shutdown()))
+            assert isinstance(_recv(edge["ctrl_ack"]), Bye)
+            thread.join(timeout=2.0)
+        finally:
+            for transport in edge.values():
+                transport.close()
+        assert not thread.is_alive()
+        assert isinstance(action, Action)
+        assert (action.action_type, action.chunk) == ("waypoints", [[0.3, 0.0], [0.6, 0.1]])

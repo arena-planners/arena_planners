@@ -17,6 +17,7 @@ _V_CAP = 0.5
 _W_CAP = 1.0
 _TIMEOUT_FACTOR = 3.0
 _TIMEOUT_SLACK_S = 1.0
+_MAX_TURN_DEG = 360.0
 
 
 def wrap_angle(angle: float) -> float:
@@ -36,15 +37,20 @@ class Primitives:
     turn_deg: float = 15.0
 
 
-def primitives_from_manifest(manifest: dict) -> Primitives:
-    """Primitives of a discrete manifest, which must declare a RobotPoseTFGenerator datasource named robot_pose."""
+def require_robot_pose(manifest: dict, action_type: str) -> None:
+    """Raise ValueError unless the manifest declares a RobotPoseTFGenerator datasource named robot_pose."""
     datasources = (manifest.get("observations") or {}).get("datasources") or {}
     source = datasources.get("robot_pose") or {}
     if source.get("type") != "RobotPoseTFGenerator":
         raise ValueError(
-            "action_type discrete needs observations.datasources.robot_pose of type RobotPoseTFGenerator, "
+            f"action_type {action_type} needs observations.datasources.robot_pose of type RobotPoseTFGenerator, "
             f"got {source.get('type')!r}"
         )
+
+
+def primitives_from_manifest(manifest: dict) -> Primitives:
+    """Primitives of a discrete manifest, which must declare a RobotPoseTFGenerator datasource named robot_pose."""
+    require_robot_pose(manifest, "discrete")
     raw = manifest.get("primitives") or {}
     known = {field.name for field in dataclasses.fields(Primitives)}
     if unknown := sorted(set(raw) - known):
@@ -97,23 +103,34 @@ class MoveStep:
     timed_out: bool = False
 
 
+def check_amount(command: str, amount: float) -> None:
+    """Raise ValueError unless `amount` can size `command`: finite, not negative, and below 360 for a turn."""
+    if not (math.isfinite(amount) and amount >= 0.0):
+        raise ValueError(f"discrete amount must be finite and >= 0, got {amount!r}")
+    if command != "forward" and amount >= _MAX_TURN_DEG:
+        raise ValueError(f"discrete turn amount must be below {_MAX_TURN_DEG:g} degrees, got {amount!r}")
+
+
 def start_move(
     command: str,
     pose: typing.Sequence[float],
     t_s: float,
     primitives: Primitives,
     limits: Limits,
+    amount: float = 0.0,
 ) -> Move:
-    """Move for `command` from `pose` = [x, y, theta] at sim time `t_s`."""
+    """Move for `command` from `pose` = [x, y, theta] at sim time `t_s`, sized `amount` (0 = the primitive)."""
     if command not in COMMANDS:
         raise ValueError(f"discrete command {command!r} not in {sorted(COMMANDS)}")
+    amount = float(amount)
+    check_amount(command, amount)
     x, y, theta = (float(c) for c in pose[:3])
     if command == "forward":
-        distance_m, turn_rad = primitives.forward_m, 0.0
+        distance_m, turn_rad = amount or primitives.forward_m, 0.0
         nominal_s = distance_m / limits.v_max
     else:
         distance_m = 0.0
-        turn_rad = math.radians(primitives.turn_deg) * (1.0 if command == "left" else -1.0)
+        turn_rad = math.radians(amount or primitives.turn_deg) * (1.0 if command == "left" else -1.0)
         nominal_s = abs(turn_rad) / limits.w_max
     return Move(
         command=command,
@@ -138,7 +155,8 @@ def _track(move: Move, pose: typing.Sequence[float]) -> MoveStep:
             v=_clamp(_GAIN * remaining, _V_MIN, move.limits.v_max),
             omega=_clamp(_GAIN * wrap_angle(move.theta0 - theta), -move.limits.w_max, move.limits.w_max),
         )
-    err = wrap_angle(move.theta0 + move.turn_rad - theta)
+    half = 0.5 * move.turn_rad
+    err = move.turn_rad - half - wrap_angle(theta - move.theta0 - half)
     if abs(err) <= _TURN_TOLERANCE_RAD:
         return MoveStep(done=True)
     return MoveStep(omega=math.copysign(_clamp(_GAIN * abs(err), _W_MIN, move.limits.w_max), err))

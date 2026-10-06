@@ -1,6 +1,6 @@
 # arena_planners
 
-Subprocess-isolated DRL planner bridge for Arena-Rosnav. Each planner runs in its own venv (own torch/gym/numpy versions), communicates with Arena over msgpack-on-ZMQ, and is driven by a single `step(features) -> [v, omega]` contract (or a discrete forward/left/right command).
+Subprocess-isolated DRL planner bridge for Arena-Rosnav. Each planner runs in its own venv (own torch/gym/numpy versions), communicates with Arena over msgpack-on-ZMQ, and is driven by a single `step(features) -> [v, omega]` contract (or a discrete forward/left/right command, or a chunk of waypoints or twists).
 
 ## Layout
 

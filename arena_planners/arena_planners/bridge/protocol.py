@@ -73,7 +73,7 @@ class Obs:
 
 @dataclasses.dataclass(frozen=False)
 class Action:
-    """Planner to edge: velocity or discrete command for the current tick."""
+    """Planner to edge: velocity, discrete or chunked command for the current tick."""
 
     op: str = dataclasses.field(default="action", init=False, repr=True)
     t_sec: int = 0
@@ -83,6 +83,8 @@ class Action:
     action: list[float] = dataclasses.field(default_factory=list)
     signal: str = ""  # planner signal to Arena such as "arrived", empty = none
     command: str = ""  # discrete primitive "forward", "left" or "right", empty = hold still
+    amount: float = 0.0  # discrete move size in meters or degrees, 0 = the manifest primitive
+    chunk: list[list[float]] = dataclasses.field(default_factory=list)  # waypoints or [v, omega] twists, empty = hold
 
 
 @dataclasses.dataclass(frozen=False)

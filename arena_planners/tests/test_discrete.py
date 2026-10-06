@@ -11,6 +11,7 @@ from arena_planners.bridge.discrete import (
     Move,
     MoveStep,
     Primitives,
+    check_amount,
     primitives_from_manifest,
     start_move,
     step_move,
@@ -30,11 +31,12 @@ def _drive(
     primitives: Primitives = _DEFAULT_PRIMITIVES,
     limits: Limits = _DEFAULT_LIMITS,
     yaw_bias: float = 0.0,
+    amount: float = 0.0,
     max_steps: int = 1000,
 ) -> tuple[Move, tuple[float, float, float], list[MoveStep]]:
     x, y, theta = pose
     t = 0.0
-    move = start_move(command, [x, y, theta], t, primitives, limits)
+    move = start_move(command, [x, y, theta], t, primitives, limits, amount)
     steps: list[MoveStep] = []
     for _ in range(max_steps):
         step = step_move(move, [x, y, theta], t)
@@ -195,6 +197,67 @@ class TestTimeout:
     def test_reaching_the_target_late_is_not_a_timeout(self) -> None:
         move = start_move("forward", [0.0, 0.0, 0.0], 0.0, Primitives(), Limits())
         assert step_move(move, [0.25, 0.0, 0.0], move.deadline_s + 5.0) == MoveStep(done=True)
+
+
+class TestAmount:
+    @pytest.mark.parametrize("theta", [0.0, 2.0, -math.pi + 0.01])
+    def test_forward_amount_overrides_the_step_length(self, theta: float) -> None:
+        move, (x, y, _), _ = _drive("forward", (1.0, -2.0, theta), amount=0.75)
+        progress = (x - 1.0) * math.cos(theta) + (y + 2.0) * math.sin(theta)
+        assert move.distance_m == 0.75
+        assert 0.73 <= progress <= 0.76
+
+    @pytest.mark.parametrize(
+        ("command", "degrees", "theta0"),
+        [
+            ("left", 30.0, 0.0),
+            ("right", 30.0, math.pi - 0.1),
+            ("left", 90.0, math.pi - 0.2),
+            ("right", 90.0, -math.pi + 0.2),
+            ("left", 180.0, 0.5),
+            ("right", 180.0, -2.5),
+            ("left", 270.0, 3.0),
+        ],
+    )
+    def test_turn_amount_in_degrees(self, command: str, degrees: float, theta0: float) -> None:
+        sign = 1.0 if command == "left" else -1.0
+        move, (x, y, theta), steps = _drive(command, (3.0, 4.0, theta0), amount=degrees)
+        assert move.turn_rad == pytest.approx(sign * math.radians(degrees))
+        assert abs(wrap_angle(theta - theta0 - sign * math.radians(degrees))) <= math.radians(1.0)
+        assert (x, y) == (3.0, 4.0)
+        assert all(math.copysign(1.0, s.omega) == sign for s in steps[:-1])
+
+    def test_zero_amount_is_the_primitive(self) -> None:
+        primitives = Primitives(forward_m=0.4, turn_deg=20.0)
+        forward = start_move("forward", [0.0, 0.0, 0.0], 0.0, primitives, Limits(), 0.0)
+        turn = start_move("right", [0.0, 0.0, 0.0], 0.0, primitives, Limits(), 0.0)
+        assert forward.distance_m == 0.4
+        assert turn.turn_rad == pytest.approx(-math.radians(20.0))
+
+    def test_timeout_scales_with_the_amount(self) -> None:
+        forward = start_move("forward", [0.0, 0.0, 0.0], 2.0, Primitives(), Limits(), 0.75)
+        turn = start_move("left", [0.0, 0.0, 0.0], 2.0, Primitives(), Limits(v_max=0.5, w_max=0.5), 90.0)
+        assert forward.deadline_s == pytest.approx(2.0 + 3.0 * 0.75 / 0.5 + 1.0)
+        assert turn.deadline_s == pytest.approx(2.0 + 3.0 * (0.5 * math.pi) / 0.5 + 1.0)
+
+    @pytest.mark.parametrize(
+        ("command", "amount", "match"),
+        [
+            ("forward", -0.1, ">= 0"),
+            ("left", -30.0, ">= 0"),
+            ("forward", math.nan, "finite"),
+            ("right", math.inf, "finite"),
+            ("left", 360.0, "below 360"),
+        ],
+    )
+    def test_rejects_bad_amount(self, command: str, amount: float, match: str) -> None:
+        with pytest.raises(ValueError, match=match):
+            check_amount(command, amount)
+        with pytest.raises(ValueError, match=match):
+            start_move(command, [0.0, 0.0, 0.0], 0.0, Primitives(), Limits(), amount)
+
+    def test_long_forward_accepted(self) -> None:
+        check_amount("forward", 400.0)
 
 
 def test_start_move_rejects_unknown_command() -> None:

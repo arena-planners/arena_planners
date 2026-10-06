@@ -144,6 +144,44 @@ def test_action_without_command_key_decodes_as_hold():
     assert result.command == ""
 
 
+def test_action_amount_roundtrip():
+    result = _roundtrip(Action(seq=6, action_type="discrete", command="forward", amount=0.75))
+    assert result.command == "forward"
+    assert result.amount == 0.75
+    assert result.chunk == []
+
+
+def test_action_chunk_roundtrip():
+    chunk = [[0.5, 0.0], [1.0, 0.2, 0.1]]
+    result = _roundtrip(Action(seq=8, action_type="waypoints", chunk=chunk, signal="arrived"))
+    assert result.action_type == "waypoints"
+    assert result.chunk == chunk
+    assert result.action == []
+    assert result.command == ""
+    assert result.amount == 0.0
+    assert result.signal == "arrived"
+
+
+def test_action_numpy_chunk_roundtrip():
+    chunk = np.array([[0.2, 0.1], [0.3, -0.1]], dtype=np.float32)
+    result = _roundtrip(Action(seq=9, action_type="velocity_chunk", chunk=chunk))
+    np.testing.assert_array_equal(result.chunk, chunk)
+
+
+def test_action_without_amount_or_chunk_keys_decodes_as_defaults():
+    raw = {"op": "action", "seq": 2, "action_type": "discrete", "action": [], "signal": "", "command": "left"}
+    result = decode_frame(msgpack.packb(raw, use_bin_type=True))
+    assert result.command == "left"
+    assert result.amount == 0.0
+    assert result.chunk == []
+
+
+def test_action_defaults_are_not_shared():
+    first, second = Action(), Action()
+    first.chunk.append([1.0, 0.0])
+    assert second.chunk == []
+
+
 def test_action_omnidirectional():
     frame = Action(
         t_sec=1,

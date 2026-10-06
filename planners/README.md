@@ -3,7 +3,7 @@
 Each subdirectory is a submodule (one planner). Required files:
 
 - `planner.py`: entry point. Subscribes to the SDK bridge, runs `step()`.
-- `planner.yaml`: manifest: `action_type`, `rate_hz`, `depends`, `observations`, `config`, `goal_inputs` for VLA planners, and `primitives` for discrete planners.
+- `planner.yaml`: manifest: `action_type`, `rate_hz`, `depends`, `observations`, `config`, `goal_inputs` for VLA planners, `primitives` for discrete planners, and `chunk` for chunked planners.
 
   `config` is a free-form mapping the planner receives at Init as `planner_config`, through `main_loop(..., on_init=fn)` or `PlannerSDK.planner_config`. `robot.mobile.config.<key>:=<value>` overrides a key per launch.
 
@@ -16,7 +16,11 @@ Each subdirectory is a submodule (one planner). Required files:
   `action_type` is the planner's native action space and determines the `step()` return shape:
   - `differential_drive`: return `[v, omega]` (forward speed, yaw rate).
   - `omnidirectional`: return `[vx, vy]` or `[vx, vy, omega]` in the world frame (omega defaults to 0).
-  - `discrete` (VLN-CE style): return `Step(command="forward"|"left"|"right")`, or `Step()` to hold still. Any other command or a plain list fails the step. `primitives: {forward_m: 0.25, turn_deg: 15.0}` (the defaults) sizes the moves, and the manifest must declare a `robot_pose` datasource of type `RobotPoseTFGenerator`. The bridge runs each move closed-loop on that pose at up to 0.5 m/s and 1 rad/s (lower when the robot's velocity limits are), and sends the next observation only once the move ends: on reaching the target within 2 cm or 1 degree, or at a timeout of three times the nominal duration plus 1 s, which a blocked move runs into.
+  - `discrete` (VLN-CE style): return `Step(command="forward"|"left"|"right")`, or `Step()` to hold still. Any other command or a plain list fails the step. `primitives: {forward_m: 0.25, turn_deg: 15.0}` (the defaults) sizes the moves, `Step(command=..., amount=x)` sizes one move as `x` meters forward or `x` degrees turned (0 means the primitive, a negative amount or a turn of 360 degrees or more fails the step), and the manifest must declare a `robot_pose` datasource of type `RobotPoseTFGenerator`. The bridge runs each move closed-loop on that pose at up to 0.5 m/s and 1 rad/s (lower when the robot's velocity limits are), and sends the next observation only once the move ends: on reaching the target within 2 cm or 1 degree, or at a timeout of three times the nominal duration plus 1 s, which a blocked move runs into.
+  - `waypoints`: return `Step(chunk=[[x, y], ...])` (or `[x, y, yaw]` entries, yaw ignored), a path in meters in the robot frame of the observation it answers (x forward, y left). The bridge follows it with pure pursuit (lookahead `chunk.lookahead_m`, default 0.3 m, at `chunk.speed_mps`, default 0.5 m/s, capped by the robot's linear and angular limits, slowing near the last point, turning in place while its lookahead point lies more than 90 degrees off the heading) until `chunk.execute_s` (default 1 s) elapses or the robot is within 5 cm of the last point.
+  - `velocity_chunk`: return `Step(chunk=[[v, omega], ...])`. The bridge applies each twist for `chunk.dt` (default 0.1 s, best a multiple of the planner tick) through the velocity-limit clamp, until `chunk.execute_s` elapses or the twists run out.
+
+  Both chunk types need the `robot_pose` datasource like `discrete`, and `chunk: {execute_s, dt, lookahead_m, speed_mps}` (all optional, other keys refused) tunes them. `Step()` or an empty chunk holds still. A wrong entry width, a plain list, a `command`, an `amount` or an `action` vector fails the step, as does a `chunk` under any other action type. The bridge drives a chunk or move at 20 Hz (snapped to the physics step, never faster than the planner tick) between planner ticks, so a slow planner's robot does not run into its command timeout. It sends the next observation the tick a chunk ends and keeps its last twist meanwhile, so the robot keeps moving while the planner computes the next chunk. Cancel and reset stop it.
 
   `rate_hz` is the tick the policy was trained at (default 10); `robot.mobile.rate:=` overrides it.
 

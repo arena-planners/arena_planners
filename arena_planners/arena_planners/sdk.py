@@ -11,7 +11,8 @@ import typing
 import yaml
 import zmq
 
-from arena_planners.bridge.discrete import COMMANDS
+from arena_planners.bridge.chunk import CHUNK_TYPES, check_chunk
+from arena_planners.bridge.discrete import COMMANDS, check_amount
 from arena_planners.bridge.protocol import (
     PROTOCOL_VERSION,
     Action,
@@ -39,19 +40,28 @@ from arena_planners.bridge.transport import (
 
 _log = logging.getLogger(__name__)
 
-KNOWN_ACTION_TYPES: frozenset[str] = frozenset({"differential_drive", "omnidirectional", "discrete"})
-_ACTION_DIMS: dict[str, int] = {"differential_drive": 2, "omnidirectional": 3, "discrete": 0}
+_VELOCITY_TYPES: frozenset[str] = frozenset({"differential_drive", "omnidirectional"})
+KNOWN_ACTION_TYPES: frozenset[str] = _VELOCITY_TYPES | {"discrete"} | CHUNK_TYPES
+_ACTION_DIMS: dict[str, int] = {
+    "differential_drive": 2,
+    "omnidirectional": 3,
+    "discrete": 0,
+    "waypoints": 0,
+    "velocity_chunk": 0,
+}
 
 _DEFAULT_HEARTBEAT_PERIOD_S: float = 1.0
 
 
 @dataclasses.dataclass
 class Step:
-    """A `step()` result: a velocity `action` or a discrete `command`, plus an optional signal such as "arrived"."""
+    """A `step()` result: a velocity `action`, a discrete `command` sized by `amount`, or a `chunk`, plus a signal."""
 
     action: list[float] = dataclasses.field(default_factory=list)
     command: str = ""
     signal: str = ""
+    amount: float = 0.0
+    chunk: list[list[float]] = dataclasses.field(default_factory=list)
 
 
 def load_manifest(path: str | pathlib.Path) -> dict:
@@ -145,22 +155,36 @@ class PlannerSDK:
                 action=step.action,
                 signal=step.signal,
                 command=step.command,
+                amount=step.amount,
+                chunk=step.chunk,
             )
         )
 
     def _as_step(self, result: list[float] | Step) -> Step:
-        if self._action_type != "discrete":
-            step = result if isinstance(result, Step) else Step(result)
-            if step.command:
-                raise ValueError(f"command {step.command!r} needs action_type discrete, not {self._action_type!r}")
+        action_type = self._action_type
+        step = result if isinstance(result, Step) else Step(result)
+        amount = float(step.amount)
+        if step.command and action_type != "discrete":
+            raise ValueError(f"command {step.command!r} needs action_type discrete, not {action_type!r}")
+        if amount and action_type != "discrete":
+            raise ValueError(f"amount {amount!r} needs action_type discrete, not {action_type!r}")
+        if len(step.chunk) and action_type not in CHUNK_TYPES:
+            raise ValueError(f"chunk needs action_type in {sorted(CHUNK_TYPES)}, not {action_type!r}")
+        if action_type in _VELOCITY_TYPES:
             return step
+        field = "command" if action_type == "discrete" else "chunk"
         if not isinstance(result, Step):
-            raise TypeError(f"a discrete planner must return Step(command=...), got {type(result).__name__}")
-        if result.command and result.command not in COMMANDS:
-            raise ValueError(f"discrete command {result.command!r} not in {sorted(COMMANDS)} or empty")
-        if result.action:
-            raise ValueError(f"a discrete planner sends no action vector, got {result.action!r}")
-        return result
+            raise TypeError(f"a {action_type} planner must return Step({field}=...), got {type(result).__name__}")
+        if len(step.action):
+            raise ValueError(f"a {action_type} planner sends no action vector, got {step.action!r}")
+        if action_type in CHUNK_TYPES:
+            return dataclasses.replace(step, chunk=check_chunk(action_type, step.chunk))
+        if step.command and step.command not in COMMANDS:
+            raise ValueError(f"discrete command {step.command!r} not in {sorted(COMMANDS)} or empty")
+        if amount and not step.command:
+            raise ValueError(f"discrete amount {amount!r} needs a command")
+        check_amount(step.command, amount)
+        return dataclasses.replace(step, amount=amount)
 
     def _handle_control(
         self,
