@@ -40,23 +40,27 @@ def _targets(args: argparse.Namespace) -> list[tuple[str, Path | None]]:
     return [(name, registry.planner_dir(name, root)) for name in names]
 
 
+def _size(n: int) -> str:
+    exp = min(3, max(0, (n.bit_length() - 1) // 10))
+    return f"{n} B" if exp == 0 else f"{n / 1024**exp:.1f} {('KiB', 'MiB', 'GiB')[exp - 1]}"
+
+
 def cmd_fetch(args: argparse.Namespace) -> int:
     rc = 0
     for name, pdir in _targets(args):
         if pdir is None:
             print(f"{name}: not registered", file=sys.stderr)
             rc = 1
-        elif not weights.read(pdir):
-            print(f"{name}: no weights")
-        elif not weights.missing(pdir):
-            print(f"{name}: already downloaded")
-        else:
-            print(f"{name}: downloading")
-            try:
-                weights.fetch(pdir)
-            except Exception as exc:
-                print(f"{name}: download failed: {exc}", file=sys.stderr)
-                rc = 1
+            continue
+        try:
+            if not weights.read(pdir):
+                print(f"{name}: no weights")
+                continue
+            for item in weights.fetch(pdir):
+                print(f"{name}: {item.dest} {_size(item.size)} {item.status}", flush=True)
+        except Exception as exc:
+            print(f"{name}: download failed: {exc}", file=sys.stderr)
+            rc = 1
     return rc
 
 
@@ -68,7 +72,12 @@ def cmd_check(args: argparse.Namespace) -> int:
             if not args.quiet:
                 print(f"[ ] {name}: not registered")
             continue
-        gaps = weights.missing(pdir)
+        try:
+            gaps = weights.missing(pdir)
+        except weights.ManifestError as exc:
+            rc = 1
+            print(f"[ ] {name}: bad weights.yaml: {exc}", file=sys.stderr)
+            continue
         if gaps:
             rc = 1
             if not args.quiet:
@@ -83,7 +92,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(prog="arena_planners", description="planner registry + weights")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("ls", help="list planners and their checkout status")
-    p_fetch = sub.add_parser("fetch", help="download declared weights via huggingface_hub")
+    p_fetch = sub.add_parser("fetch", help="download, verify (sha256) and link declared weights")
     p_fetch.add_argument("names", nargs="*")
     p_fetch.add_argument("--all", action="store_true", help="every registered planner")
     p_check = sub.add_parser("check", help="report declared weights missing on disk")

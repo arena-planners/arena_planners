@@ -26,7 +26,7 @@ The `robot.mobile:=drl` adapter (in Arena's `task_generator`) spawns the planner
 
 1. Create a submodule under `planners/<name>/` matching the contract in [planners/README.md](planners/README.md).
 2. Register it in this repo's `.gitmodules` with a `planner = <name>` tag.
-3. From Arena: `arena feature planners add <name>` initializes the submodule and fetches HF weights if `weights.yaml` is present.
+3. From Arena: `arena feature planners add <name>` initializes the submodule and fetches and verifies the weights declared in `weights.yaml`, if present.
 
 ## License
 

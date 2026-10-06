@@ -27,14 +27,18 @@ Each subdirectory is a submodule (one planner). Required files:
   The bridge dispatches per robot: holonomic robots receive `omnidirectional` actions verbatim; diff-drive robots receive the projection `(v=|vel|, omega=heading_err/step_dt + omega_in)` applied by [`bridge/projection.py`](../arena_planners/arena_planners/bridge/projection.py). Planners must not reinvent that projection inside `step()`.
   `sensor_msgs/LaserScan` datasources always deliver the canonical scan: ray 0 along the robot heading, CCW over a full circle, non-returns and sub-`range_min` values equal to `range_max`, everything clipped to `[range_min, range_max]`. `params.canonical_beams` sets the ray count (mandatory for models with a fixed input width), otherwise the message's own count is kept. Planners never see a simulator's raw beam layout.
 - `package.xml`, `pyproject.toml`: ROS + Python packaging.
-- `weights.yaml`: optional, HF-backed checkpoint manifest. Schema:
+- `weights.yaml`: optional checkpoint manifest. Every entry is either a Hugging Face file or a URL, and every entry needs `sha256`:
 
   ```yaml
   files:
     - repo: <hf-namespace>/<repo>     # e.g. arena-rosnav/drlvo
-      filename: <name-on-hf>          # the asset's filename in the HF repo
-      dest: <path-in-planner-dir>     # where to symlink locally, e.g. model/drl_vo.zip
-      sha256: <hex>                   # optional integrity check
+      filename: <path-in-hf-repo>
+      revision: <commit-sha>          # optional, pins the HF revision
+      dest: <path-in-planner-dir>     # e.g. model/drl_vo.zip
+      sha256: <hex>
+    - url: <https://... or gs://bucket/path>
+      dest: <path-in-planner-dir>
+      sha256: <hex>
   ```
 
-  `arena feature planners add <name>` reads this after submodule checkout and `hf_hub_download`s each entry into the HF cache, symlinking `dest` to the cached path. Missing `weights.yaml` is fine.
+  `arena feature planners add <name>` runs `python -m arena_planners fetch <name>` after checkout, which prints one line per file (dest, size, and `downloaded`, `verified` or `cached`). HF entries go through `hf_hub_download` into the HF cache. URL entries are streamed with urllib (`gs://b/p` as `https://storage.googleapis.com/b/p`) into a content cache at `$ARENA_WEIGHTS_CACHE`, else `arena-planners-weights/<sha256>` next to the HF hub cache. Each file's sha256 must match the manifest, otherwise the fetch fails naming both hashes and a bad URL download is removed. A `<sha256>.sha256-ok` marker in the content cache records a verified file, so later fetches skip re-hashing it (HF files get their marker under `hf/` there, keyed by blob path). `dest` is a symlink to the cached file, and a symlink pointing elsewhere is replaced. Unknown keys, a missing `sha256`, or both `repo` and `url` in one entry fail the manifest. Missing `weights.yaml` is fine.
