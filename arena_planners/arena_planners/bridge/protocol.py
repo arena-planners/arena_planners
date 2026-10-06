@@ -8,8 +8,6 @@ import typing
 import msgpack
 import msgpack_numpy
 
-msgpack_numpy.patch()
-
 PROTOCOL_VERSION: int = 2
 SCHEMA_VERSION: int = 1
 
@@ -177,13 +175,13 @@ def encode_frame(frame: Frame) -> bytes:
         if field.name == "op":
             continue
         payload[field.name] = getattr(frame, field.name)
-    return msgpack.packb(payload, use_bin_type=True)
+    return msgpack.packb(payload, use_bin_type=True, default=msgpack_numpy.encode)
 
 
 def decode_frame(buf: bytes) -> Frame:
     """Deserialize msgpack bytes to a Frame, raising ProtocolError on bad input."""
     try:
-        raw: dict = msgpack.unpackb(buf, raw=False)
+        raw: dict = msgpack.unpackb(buf, raw=False, object_hook=msgpack_numpy.decode)
     except Exception as exc:
         raise ProtocolError(f"msgpack decode failed: {exc}") from exc
 
