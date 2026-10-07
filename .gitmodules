@@ -167,3 +167,9 @@
 	planner = viplanner
 	branch = master
 	update = rebase
+[submodule "visual/socialnav"]
+	path = planners/socialnav
+	url = https://github.com/arena-planners/socialnav.git
+	planner = socialnav
+	branch = master
+	update = rebase
