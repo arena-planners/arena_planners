@@ -179,3 +179,9 @@
 	planner = citywalker
 	branch = master
 	update = rebase
+[submodule "visual/xmobility"]
+	path = planners/xmobility
+	url = https://github.com/arena-planners/xmobility.git
+	planner = xmobility
+	branch = master
+	update = rebase
