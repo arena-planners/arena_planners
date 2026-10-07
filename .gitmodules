@@ -161,3 +161,9 @@
 	planner = iplanner
 	branch = master
 	update = rebase
+[submodule "visual/viplanner"]
+	path = planners/viplanner
+	url = https://github.com/arena-planners/viplanner.git
+	planner = viplanner
+	branch = master
+	update = rebase
