@@ -173,3 +173,9 @@
 	planner = socialnav
 	branch = master
 	update = rebase
+[submodule "visual/citywalker"]
+	path = planners/citywalker
+	url = https://github.com/arena-planners/citywalker.git
+	planner = citywalker
+	branch = master
+	update = rebase
