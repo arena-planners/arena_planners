@@ -149,3 +149,9 @@
 	planner = pi05
 	branch = master
 	update = rebase
+[submodule "visual/navdp"]
+	path = planners/navdp
+	url = https://github.com/arena-planners/navdp.git
+	planner = navdp
+	branch = master
+	update = rebase
