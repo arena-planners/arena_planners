@@ -155,3 +155,9 @@
 	planner = navdp
 	branch = master
 	update = rebase
+[submodule "visual/iplanner"]
+	path = planners/iplanner
+	url = https://github.com/arena-planners/iplanner.git
+	planner = iplanner
+	branch = master
+	update = rebase
