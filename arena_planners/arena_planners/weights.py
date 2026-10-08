@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 from pathlib import Path
 
 _MANIFEST = "weights.yaml"
@@ -23,30 +25,54 @@ def read(planner_dir: Path) -> list[dict]:
     return list(data.get("files") or [])
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _current(planner_dir: Path, entry: dict) -> bool:
+    """Whether `dest` holds the file the entry declares, by sha256 or else by HF cache link target."""
+    dest = planner_dir / entry["dest"]
+    if not dest.is_file():
+        return False
+    if entry.get("sha256"):
+        return _sha256(dest) == entry["sha256"]
+    if not dest.is_symlink():
+        return True
+    target = os.readlink(dest)
+    repo_dir = f"/models--{entry['repo'].replace('/', '--')}/snapshots/"
+    return repo_dir in target and target.endswith(f"/{entry['filename']}")
+
+
 def missing(planner_dir: Path) -> list[str]:
-    """Return the declared `dest` paths that are not present on disk."""
-    return [entry["dest"] for entry in read(planner_dir) if not (planner_dir / entry["dest"]).is_file()]
+    """Return the declared `dest` paths that are absent or hold another file than declared."""
+    return [entry["dest"] for entry in read(planner_dir) if not _current(planner_dir, entry)]
 
 
 def fetch(planner_dir: Path) -> list[str]:
     """Download each declared file via huggingface_hub and symlink it to `dest`.
 
-    Files already present are skipped. Returns the `dest` paths newly linked.
+    Current files are skipped, stale ones replaced. Returns the `dest` paths newly linked.
     """
-    entries = read(planner_dir)
-    if not entries:
+    stale = [entry for entry in read(planner_dir) if not _current(planner_dir, entry)]
+    if not stale:
         return []
     from huggingface_hub import hf_hub_download
 
     fetched: list[str] = []
-    for entry in entries:
+    for entry in stale:
         dest = planner_dir / entry["dest"]
-        if dest.is_file():
-            continue
         cached = hf_hub_download(repo_id=entry["repo"], filename=entry["filename"])
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.is_symlink() or dest.exists():
             dest.unlink()
         dest.symlink_to(cached)
+        if entry.get("sha256") and _sha256(dest) != entry["sha256"]:
+            raise ValueError(
+                f"{entry['dest']}: sha256 of {entry['repo']}/{entry['filename']} does not match weights.yaml"
+            )
         fetched.append(entry["dest"])
     return fetched

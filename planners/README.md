@@ -24,4 +24,4 @@ Each subdirectory is a submodule (one planner). Required files:
       sha256: <hex>                   # optional integrity check
   ```
 
-  `arena feature planners add <name>` reads this after submodule checkout and `hf_hub_download`s each entry into the HF cache, symlinking `dest` to the cached path. Missing `weights.yaml` is fine.
+  `arena feature planners add <name>` reads this after submodule checkout and `hf_hub_download`s each entry into the HF cache, symlinking `dest` to the cached path. A `dest` whose content misses the declared `sha256`, or without one, whose link points at another repo or filename, counts as missing and is replaced on the next fetch. Missing `weights.yaml` is fine.
