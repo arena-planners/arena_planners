@@ -176,6 +176,12 @@ def test_hf_entry_with_verified_dest_needs_no_network(tmp_path: Path):
     assert [f.status for f in weights.fetch(pdir, cache)] == ["cached"]
 
 
+def test_gated_error_names_the_terms_page_and_the_login():
+    message = str(weights.GatedError("nvidia/X-Mobility"))
+    assert "https://huggingface.co/nvidia/X-Mobility" in message
+    assert "hf auth login" in message and "HF_TOKEN" in message
+
+
 def test_hf_kwargs_forward_revision():
     entry = weights.Entry(dest="m.pt", sha256="c" * 64, repo="org/model", filename="m.pt", revision="d" * 40)
     assert weights.hf_kwargs(entry) == {"repo_id": "org/model", "filename": "m.pt", "revision": "d" * 40}

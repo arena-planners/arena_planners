@@ -26,7 +26,7 @@ The `robot.mobile:=drl` adapter (in Arena's `task_generator`) spawns the planner
 
 1. Create a submodule under `planners/<name>/` matching the contract in [planners/README.md](planners/README.md).
 2. Register it in this repo's `.gitmodules` with a `planner = <name>` tag.
-3. From Arena: `arena feature planners add <name>` initializes the submodule and fetches and verifies the weights declared in `weights.yaml`, if present.
+3. From Arena: `arena feature planners add <name>` initializes the submodule and fetches and verifies the weights declared in `weights.yaml`, if present. For a gated Hugging Face repo the fetch names the page where the terms are accepted and stops for that planner. Accept them, log in with `hf auth login` (or set `HF_TOKEN`) and run the command again.
 
 ## License
 

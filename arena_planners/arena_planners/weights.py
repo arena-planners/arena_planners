@@ -29,6 +29,15 @@ class ChecksumError(RuntimeError):
     """A fetched file's sha256 differs from the manifest."""
 
 
+class GatedError(RuntimeError):
+    """A Hugging Face repo whose terms the logged-in account has not accepted."""
+
+    def __init__(self, repo: str) -> None:
+        login = "log in with `hf auth login` (or set HF_TOKEN), then fetch again"
+        super().__init__(f"{repo} is gated: accept its terms at https://huggingface.co/{repo}, {login}")
+        self.repo = repo
+
+
 @dataclass(frozen=True)
 class Entry:
     """One validated `files` item: an HF file when `repo` is set, else a URL."""
@@ -228,10 +237,14 @@ def _fetch_hf(entry: Entry, dest: Path, cache: Path) -> tuple[Path | None, str]:
         except ChecksumError:
             pass
     from huggingface_hub import hf_hub_download, try_to_load_from_cache
+    from huggingface_hub.errors import GatedRepoError
 
     kwargs = hf_kwargs(entry)
     was_cached = isinstance(try_to_load_from_cache(**kwargs), str)
-    path = Path(hf_hub_download(**kwargs))
+    try:
+        path = Path(hf_hub_download(**kwargs))
+    except GatedRepoError as exc:
+        raise GatedError(kwargs["repo_id"]) from exc
     status = _verify(path, entry.sha256, _hf_marker(cache, path.resolve()))
     return path, status if was_cached else "downloaded"
 

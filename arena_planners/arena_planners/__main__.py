@@ -58,6 +58,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
                 continue
             for item in weights.fetch(pdir):
                 print(f"{name}: {item.dest} {_size(item.size)} {item.status}", flush=True)
+        except weights.GatedError as exc:
+            print(f"{name}: {exc}", file=sys.stderr)
+            rc = 1
         except Exception as exc:
             print(f"{name}: download failed: {exc}", file=sys.stderr)
             rc = 1
