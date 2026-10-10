@@ -1,0 +1,11 @@
+<library path="arena_social_cost_layer">
+  <class name="arena_social_cost_layer/SocialCostLayer" type="arena_social_cost_layer::SocialCostLayer"
+         base_class_type="nav2_costmap_2d::Layer">
+    <description>
+      Paints social cost from arena_peds (arena_people_msgs/Pedestrians): a
+      per-pedestrian personal-space term modulated by animation_state, plus
+      an HHI group/O-space term between pedestrians sharing an ACTIVE
+      interaction_id. See package README for the ANIM-on/off ablation usage.
+    </description>
+  </class>
+</library>
