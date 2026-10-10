@@ -239,13 +239,41 @@ def test_unknown_top_level_key_is_rejected(tmp_path: Path):
 
 
 def test_missing_lists_absent_dests(tmp_path: Path):
-    _manifest(
-        tmp_path,
-        f"files:\n  - url: https://x/a.pt\n    dest: a.pt\n    sha256: {'a' * 64}\n"
+    pdir = _manifest(
+        tmp_path / "planner",
+        f"files:\n  - url: https://x/a.pt\n    dest: a.pt\n    sha256: {_sha(b'a')}\n"
         f"  - url: https://x/b.pt\n    dest: b.pt\n    sha256: {'b' * 64}\n",
     )
-    (tmp_path / "a.pt").write_bytes(b"a")
-    assert weights.missing(tmp_path) == ["b.pt"]
+    (pdir / "a.pt").write_bytes(b"a")
+    assert weights.missing(pdir, tmp_path / "cache") == ["b.pt"]
+
+
+def test_link_to_another_file_than_declared_is_missing(tmp_path: Path):
+    old = tmp_path / "hub" / "gst.pt"
+    old.parent.mkdir()
+    old.write_bytes(b"old pickle")
+    pdir = _manifest(
+        tmp_path / "planner",
+        f"files:\n  - repo: org/model\n    filename: gst_state.pt\n    dest: model/gst.pt\n"
+        f"    sha256: {_sha(b'new')}\n",
+    )
+    (pdir / "model").mkdir()
+    (pdir / "model/gst.pt").symlink_to(old)
+    assert weights.missing(pdir, tmp_path / "cache") == ["model/gst.pt"]
+
+
+def test_link_to_the_declared_file_is_current(tmp_path: Path):
+    blob = tmp_path / "hub" / "gst_state.pt"
+    blob.parent.mkdir()
+    blob.write_bytes(b"new")
+    pdir = _manifest(
+        tmp_path / "planner",
+        f"files:\n  - repo: org/model\n    filename: gst_state.pt\n    dest: model/gst.pt\n"
+        f"    sha256: {_sha(b'new')}\n",
+    )
+    (pdir / "model").mkdir()
+    (pdir / "model/gst.pt").symlink_to(blob)
+    assert weights.missing(pdir, tmp_path / "cache") == []
 
 
 @pytest.mark.parametrize(

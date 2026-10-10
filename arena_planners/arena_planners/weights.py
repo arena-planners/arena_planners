@@ -116,9 +116,20 @@ def read(planner_dir: Path) -> list[Entry]:
     return entries
 
 
-def missing(planner_dir: Path) -> list[str]:
-    """Return the declared `dest` paths that are not present on disk."""
-    return [entry.dest for entry in read(planner_dir) if not (planner_dir / entry.dest).is_file()]
+def missing(planner_dir: Path, cache: Path | None = None) -> list[str]:
+    """Return the declared `dest` paths that are absent or hold another file than their `sha256`."""
+    cache = cache_root() if cache is None else cache
+    return [entry.dest for entry in read(planner_dir) if not _current(planner_dir / entry.dest, entry.sha256, cache)]
+
+
+def _current(dest: Path, sha: str, cache: Path) -> bool:
+    if not dest.is_file():
+        return False
+    try:
+        _verify(dest, sha, _hf_marker(cache, dest.resolve()))
+    except ChecksumError:
+        return False
+    return True
 
 
 def http_url(url: str) -> str:
