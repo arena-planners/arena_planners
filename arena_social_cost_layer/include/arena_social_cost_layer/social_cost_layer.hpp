@@ -56,6 +56,7 @@ private:
   double cost_scale_{1.0};
   double cost_bias_{0.0};
   bool logged_first_message_{false};
+  rclcpp::Time last_peds_arrival_{0, 0, RCL_ROS_TIME};
 
   PersonalSpaceParams personal_space_params_{};
   std::vector<double> interaction_weights_{};

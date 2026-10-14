@@ -173,6 +173,9 @@ void SocialCostLayer::pedestriansCallback(const arena_people_msgs::msg::Pedestri
 {
   std::lock_guard<std::mutex> lock(peds_mutex_);
   latest_peds_ = msg;
+  if (auto node = node_.lock()) {
+    last_peds_arrival_ = node->now();
+  }
   if (!logged_first_message_) {
     logged_first_message_ = true;
     if (auto node = node_.lock()) {
@@ -187,17 +190,22 @@ void SocialCostLayer::pedestriansCallback(const arena_people_msgs::msg::Pedestri
 arena_people_msgs::msg::Pedestrians::SharedPtr SocialCostLayer::currentPedestrians()
 {
   arena_people_msgs::msg::Pedestrians::SharedPtr peds;
+  rclcpp::Time arrival;
   {
     std::lock_guard<std::mutex> lock(peds_mutex_);
     peds = latest_peds_;
+    arrival = last_peds_arrival_;
   }
   if (!peds) {
     return nullptr;
   }
   if (auto node = node_.lock()) {
-    const rclcpp::Time stamp(peds->header.stamp);
-    const double age = (node->now() - stamp).seconds();
+    const double age = (node->now() - arrival).seconds();
     if (age > stale_timeout_s_) {
+      RCLCPP_WARN_THROTTLE(
+        node->get_logger(), *node->get_clock(), 5000,
+        "SocialCostLayer '%s': pedestrians last arrived %.1f s ago, past stale_timeout %.1f s, "
+        "painting nothing", name_.c_str(), age, stale_timeout_s_);
       return nullptr;
     }
   }
