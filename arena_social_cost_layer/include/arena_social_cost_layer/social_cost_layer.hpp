@@ -58,6 +58,11 @@ private:
   bool logged_first_message_{false};
 
   PersonalSpaceParams personal_space_params_{};
+  std::vector<double> interaction_weights_{};
+
+  double interactionWeight(uint8_t interaction_type) const;
+  double personalSpaceSigma(uint8_t animation_state) const;
+  double personalSpaceAmplitude(uint8_t animation_state) const;
   double reach_{std::max(personal_space_radius_, group_extra_radius_)};
   Box last_box_{};
 };

@@ -84,6 +84,7 @@ void SocialCostLayer::onInitialize()
   declareParameter("stale_timeout", rclcpp::ParameterValue(stale_timeout_s_));
   declareParameter("cost_scale", rclcpp::ParameterValue(cost_scale_));
   declareParameter("cost_bias", rclcpp::ParameterValue(cost_bias_));
+  declareParameter("interaction_weights", rclcpp::ParameterValue(interaction_weights_));
 
   node->get_parameter(name_ + ".enabled", enabled_);
   node->get_parameter(name_ + ".peds_topic", peds_topic_);
@@ -99,6 +100,7 @@ void SocialCostLayer::onInitialize()
   node->get_parameter(name_ + ".stale_timeout", stale_timeout_s_);
   node->get_parameter(name_ + ".cost_scale", cost_scale_);
   node->get_parameter(name_ + ".cost_bias", cost_bias_);
+  node->get_parameter(name_ + ".interaction_weights", interaction_weights_);
 
   const PersonalSpaceParams defaults{};
   const double sigma_scale = personal_space_sigma_ / defaults.base_sigma;
@@ -121,6 +123,44 @@ void SocialCostLayer::onInitialize()
     peds_sub_->get_topic_name());
 
   current_ = true;
+}
+
+double SocialCostLayer::interactionWeight(uint8_t interaction_type) const
+{
+  if (interaction_type >= interaction_weights_.size()) {
+    return 0.0;
+  }
+  return interaction_weights_[interaction_type];
+}
+
+double SocialCostLayer::personalSpaceSigma(uint8_t animation_state) const
+{
+  using Pedestrian = arena_people_msgs::msg::Pedestrian;
+  switch (animation_state) {
+    case Pedestrian::PANIC:
+    case Pedestrian::THREATENING:
+      return personal_space_params_.danger_sigma;
+    case Pedestrian::SURPRISED:
+    case Pedestrian::CURIOUS:
+      return personal_space_params_.alert_sigma;
+    default:
+      return personal_space_params_.base_sigma;
+  }
+}
+
+double SocialCostLayer::personalSpaceAmplitude(uint8_t animation_state) const
+{
+  using Pedestrian = arena_people_msgs::msg::Pedestrian;
+  switch (animation_state) {
+    case Pedestrian::PANIC:
+    case Pedestrian::THREATENING:
+      return personal_space_params_.danger_amplitude;
+    case Pedestrian::SURPRISED:
+    case Pedestrian::CURIOUS:
+      return personal_space_params_.alert_amplitude;
+    default:
+      return personal_space_params_.base_amplitude;
+  }
 }
 
 unsigned char SocialCostLayer::toCellCost(double normalized_cost) const
@@ -179,6 +219,9 @@ void SocialCostLayer::updateBounds(
       box = unionBox(box, segmentBox(p.x, p.y, p.x, p.y, reach_));
     }
     for (const auto & group : interactionGroups(*peds)) {
+      if (interactionWeight(group.interaction_type) <= 0.0) {
+        continue;
+      }
       for (size_t a = 0; a < group.members.size(); ++a) {
         for (size_t b = a + 1; b < group.members.size(); ++b) {
           const auto & pa = peds->pedestrians[group.members[a]].pose.position;
@@ -233,7 +276,9 @@ void SocialCostLayer::updateCosts(
         if (dx * dx + dy * dy > clip_r2) {
           continue;
         }
-        const double cost = personalSpaceCost(dx, dy, ped.animation_state, personal_space_params_);
+        const double cost = personalSpaceCost(
+          dx, dy, personalSpaceSigma(ped.animation_state),
+          personalSpaceAmplitude(ped.animation_state), personal_space_params_.shape);
         const unsigned char cell_cost = toCellCost(cost);
         const unsigned char existing = master_grid.getCost(i, j);
         if (existing == nav2_costmap_2d::NO_INFORMATION || cell_cost > existing) {
@@ -244,6 +289,10 @@ void SocialCostLayer::updateCosts(
   }
 
   for (const auto & group : interactionGroups(*peds)) {
+    const double weight = interactionWeight(group.interaction_type);
+    if (weight <= 0.0) {
+      continue;
+    }
     const auto & members = group.members;
     for (size_t a = 0; a < members.size(); ++a) {
       for (size_t b = a + 1; b < members.size(); ++b) {
@@ -263,8 +312,7 @@ void SocialCostLayer::updateCosts(
               continue;
             }
             const double cost = groupBetweenCost(
-              wx, wy, pa.x, pa.y, pb.x, pb.y, group.interaction_type, group_sigma_,
-              falloff_shape_);
+              wx, wy, pa.x, pa.y, pb.x, pb.y, weight, group_sigma_, falloff_shape_);
             const unsigned char cell_cost = toCellCost(cost);
             const unsigned char existing = master_grid.getCost(i, j);
             if (existing == nav2_costmap_2d::NO_INFORMATION || cell_cost > existing) {
