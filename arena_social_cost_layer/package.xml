@@ -23,6 +23,5 @@
 
   <export>
     <build_type>ament_cmake</build_type>
-    <nav2_costmap_2d plugin="${prefix}/arena_social_cost_layer.xml" />
   </export>
 </package>

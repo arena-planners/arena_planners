@@ -40,9 +40,6 @@ install(TARGETS arena_social_cost_layer
 install(DIRECTORY include/
   DESTINATION include
 )
-install(FILES arena_social_cost_layer.xml
-  DESTINATION share/${PROJECT_NAME}
-)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
