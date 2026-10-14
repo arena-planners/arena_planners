@@ -2,13 +2,7 @@
 <package format="3">
   <name>arena_social_cost_layer</name>
   <version>0.0.0</version>
-  <description>
-    Nav2 costmap_2d::Layer that paints social cost (personal space + HHI
-    group/O-space clearance) from arena_peds (arena_people_msgs/Pedestrians),
-    modulated by animation_state and interaction_id/interaction_type. Used
-    for the ANIM-on/ANIM-off ablation between letting a robot perceive human
-    animation/interaction signals vs. locomotion-only humans.
-  </description>
+  <description>Nav2 costmap layer painting personal-space and interaction-group cost from arena_peds.</description>
   <maintainer email="ductaingn.015203@gmail.com">ductainguyen</maintainer>
   <license>MIT</license>
 

@@ -1,7 +1,4 @@
 // Copyright 2026 ductainguyen
-//
-// Pure cost-function math for SocialCostLayer, kept free of ROS/costmap types
-// so it can be unit-tested without a live costmap or node (see test/test_cost_math.cpp).
 #pragma once
 
 #include <algorithm>
@@ -11,8 +8,7 @@
 namespace arena_social_cost_layer
 {
 
-// Mirrors arena_people_msgs/Pedestrian animation_state enum (IDLE=0, WALKING=1,
-// RUNNING=2, PANIC=3, SURPRISED=4, CURIOUS=5, THREATENING=6).
+// mirrors arena_people_msgs/Pedestrian animation_state
 enum AnimationState : uint8_t
 {
   ANIM_IDLE = 0,
@@ -24,8 +20,7 @@ enum AnimationState : uint8_t
   ANIM_THREATENING = 6,
 };
 
-// Mirrors humansim's InteractionType (core/interaction_kinds.py). Index 2 is
-// intentionally unused there (never reassign/reuse an index), kept unused here too.
+// mirrors humansim's InteractionType (core/interaction_kinds.py), index 2 is retired there
 enum InteractionType : uint8_t
 {
   INTERACTION_TALK_TO = 0,
@@ -43,22 +38,16 @@ enum InteractionType : uint8_t
 
 struct PersonalSpaceParams
 {
-  double base_sigma = 0.45;   // meters, IDLE/WALKING/RUNNING
-  double alert_sigma = 0.75;  // meters, SURPRISED/CURIOUS
-  double danger_sigma = 1.2;  // meters, PANIC/THREATENING
+  double base_sigma = 0.45;
+  double alert_sigma = 0.75;
+  double danger_sigma = 1.2;
   double base_amplitude = 0.5;
   double alert_amplitude = 0.75;
   double danger_amplitude = 1.0;
-  // Super-Gaussian shape exponent (see personalSpaceCost). 1.0 = standard
-  // Gaussian (bell curve, decays fastest near sigma). >1.0 flattens the peak
-  // into a plateau out to roughly sigma, then cuts off faster beyond it -
-  // more "high cost core + sharp edge", less "smooth bell".
-  double shape = 1.0;
+  double shape = 1.0;  // super-Gaussian exponent, 1.0 = Gaussian
 };
 
-/// Gaussian falloff radius (sigma, meters) for a human's personal-space term,
-/// scaled by their current animation_state - a panicking/threatening human
-/// gets a wider berth than one idling or walking normally.
+/// Sigma of the personal-space term for an animation state.
 inline double personalSpaceSigma(uint8_t animation_state, const PersonalSpaceParams & p = {})
 {
   switch (animation_state) {
@@ -73,6 +62,7 @@ inline double personalSpaceSigma(uint8_t animation_state, const PersonalSpacePar
   }
 }
 
+/// Amplitude of the personal-space term for an animation state.
 inline double personalSpaceAmplitude(uint8_t animation_state, const PersonalSpaceParams & p = {})
 {
   switch (animation_state) {
@@ -87,10 +77,7 @@ inline double personalSpaceAmplitude(uint8_t animation_state, const PersonalSpac
   }
 }
 
-/// Normalized (0,1] personal-space cost at offset (dx, dy) meters from a
-/// pedestrian, given their animation_state. Super-Gaussian: raises the usual
-/// Gaussian exponent to p.shape (1.0 = standard Gaussian; >1.0 flattens the
-/// near-center plateau and steepens the falloff past ~sigma).
+/// Normalized (0,1] personal-space cost at offset (dx, dy) from a pedestrian.
 inline double personalSpaceCost(
   double dx, double dy, uint8_t animation_state, const PersonalSpaceParams & p = {})
 {
@@ -100,10 +87,7 @@ inline double personalSpaceCost(
   return amplitude * std::exp(-std::pow(d2 / (2.0 * sigma * sigma), p.shape));
 }
 
-/// Relative weight of the HHI group/O-space term by interaction type. Kept
-/// separate from personal-space so the two can be combined (max) or summed by
-/// the caller. HUG/GROUP_CONVERSATION ask for more clearance than a plain
-/// TALK_TO/WAVE_AT; unlisted types fall back to a modest default.
+/// Weight of the group term by interaction type.
 inline double interactionTypeMultiplier(uint8_t interaction_type)
 {
   switch (interaction_type) {
@@ -122,7 +106,7 @@ inline double interactionTypeMultiplier(uint8_t interaction_type)
   }
 }
 
-/// Squared distance from point (px,py) to the segment [(ax,ay),(bx,by)].
+/// Squared distance from (px,py) to the segment [(ax,ay),(bx,by)].
 inline double pointToSegmentDistSq(
   double px, double py, double ax, double ay, double bx, double by)
 {
@@ -141,11 +125,7 @@ inline double pointToSegmentDistSq(
   return dx * dx + dy * dy;
 }
 
-/// Normalized (0,1] cost of point (px,py) being inside/near the O-space
-/// spanned between two interaction participants at (ax,ay) and (bx,by):
-/// a super-Gaussian falloff off the connecting segment (not just off each
-/// endpoint), so "passing between the two people" is penalized specifically,
-/// scaled by `interactionTypeMultiplier`. shape: see personalSpaceCost.
+/// Normalized (0,1] cost of (px,py) near the segment between two interaction participants.
 inline double groupBetweenCost(
   double px, double py, double ax, double ay, double bx, double by,
   uint8_t interaction_type, double sigma = 0.6, double shape = 1.0)

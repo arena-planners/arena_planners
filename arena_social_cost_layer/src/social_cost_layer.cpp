@@ -47,11 +47,6 @@ void SocialCostLayer::onInitialize()
   node->get_parameter(name_ + ".cost_scale", cost_scale_);
   node->get_parameter(name_ + ".cost_bias", cost_bias_);
 
-  // personal_space_sigma_ is the base-state (IDLE/WALKING/RUNNING) sigma,
-  // decoupled from personal_space_radius_ (the hard outer clip) so widening
-  // the clip doesn't dilute the high-cost core. Alert/danger sigmas keep the
-  // same ratios the old hardcoded defaults had (0.75/0.45, 1.2/0.45) so
-  // PANIC/THREATENING still widens proportionally from this base.
   constexpr double kAlertSigmaRatio = 0.75 / 0.45;
   constexpr double kDangerSigmaRatio = 1.2 / 0.45;
   personal_space_params_.base_sigma = personal_space_sigma_;
@@ -59,8 +54,6 @@ void SocialCostLayer::onInitialize()
   personal_space_params_.danger_sigma = personal_space_sigma_ * kDangerSigmaRatio;
   personal_space_params_.shape = falloff_shape_;
 
-  // Scan/paint window: both terms now clip at their own hard outer radius
-  // regardless of sigma/animation state, so this only needs to cover those.
   reach_ = std::max(personal_space_radius_, group_extra_radius_);
 
   peds_sub_ = node->create_subscription<arena_people_msgs::msg::Pedestrians>(
@@ -157,9 +150,6 @@ void SocialCostLayer::updateCosts(
     return;
   }
 
-  // Group pedestrians sharing an ACTIVE interaction_id, for the HHI
-  // between-participants term. interaction_id < 0 means "no active
-  // interaction" (see arena_people_msgs/Pedestrian.msg / AgentState.msg).
   std::vector<std::pair<int32_t, uint8_t>> group_ids;  // (interaction_id, interaction_type)
   std::vector<std::vector<size_t>> group_members;
   for (size_t idx = 0; idx < peds->pedestrians.size(); ++idx) {
@@ -192,10 +182,6 @@ void SocialCostLayer::updateCosts(
     const int j0 = std::max(min_j, static_cast<int>(my) - cell_reach);
     const int j1 = std::min(max_j, static_cast<int>(my) + cell_reach);
 
-    // Circular clip at the hard outer radius (same for every animation state -
-    // decoupled from sigma). The scan window above is square, so without this
-    // every cell in it gets at least cost_bias_ regardless of actual distance,
-    // painting a rectangle instead of a disk.
     const double clip_r2 = personal_space_radius_ * personal_space_radius_;
 
     for (int j = j0; j < j1; ++j) {
@@ -217,8 +203,6 @@ void SocialCostLayer::updateCosts(
     }
   }
 
-  // HHI between-participants term: for each group with >=2 members, paint the
-  // O-space along every participant pair's connecting segment.
   for (size_t g = 0; g < group_members.size(); ++g) {
     const auto & members = group_members[g];
     if (members.size() < 2) {
@@ -241,8 +225,6 @@ void SocialCostLayer::updateCosts(
         const int j0 = std::max(min_j, static_cast<int>(std::min(my0, my1)) - cell_reach);
         const int j1 = std::min(max_j, static_cast<int>(std::max(my0, my1)) + cell_reach);
 
-        // Same clip as the personal-space term above, capsule-shaped (off the
-        // segment) and at the hard outer radius, decoupled from group_sigma_.
         const double clip_r2 = group_extra_radius_ * group_extra_radius_;
 
         for (int j = j0; j < j1; ++j) {

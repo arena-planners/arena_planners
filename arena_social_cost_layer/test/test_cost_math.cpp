@@ -26,8 +26,6 @@ TEST(PersonalSpaceCost, DecaysWithDistance)
 
 TEST(PersonalSpaceCost, PanicWidensAndRaisesCost)
 {
-  // Same offset, further out - a panicking/threatening human should still
-  // carry meaningfully more cost there than a walking one (wider sigma).
   const double dx = 1.0;
   const double dy = 0.0;
   const double walking = personalSpaceCost(dx, dy, ANIM_WALKING);
@@ -55,7 +53,6 @@ TEST(InteractionTypeMultiplier, HugExceedsWaveAndTalk)
 
 TEST(GroupBetweenCost, PeaksAtMidpointBetweenParticipants)
 {
-  // Two participants 2m apart on the x axis.
   const double ax = -1.0;
   const double ay = 0.0;
   const double bx = 1.0;
