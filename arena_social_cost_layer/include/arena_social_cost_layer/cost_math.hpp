@@ -4,11 +4,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace arena_social_cost_layer
 {
 
-// mirrors arena_people_msgs/Pedestrian animation_state
+// arena_people_msgs/Pedestrian animation_state
 enum AnimationState : uint8_t
 {
   ANIM_IDLE = 0,
@@ -20,7 +21,7 @@ enum AnimationState : uint8_t
   ANIM_THREATENING = 6,
 };
 
-// mirrors humansim's InteractionType (core/interaction_kinds.py), index 2 is retired there
+// humansim InteractionType, index 2 retired
 enum InteractionType : uint8_t
 {
   INTERACTION_TALK_TO = 0,
