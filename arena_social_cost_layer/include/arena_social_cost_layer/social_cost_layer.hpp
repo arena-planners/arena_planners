@@ -1,6 +1,7 @@
 // Copyright 2026 ductainguyen
 #pragma once
 
+#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -34,6 +35,9 @@ public:
 private:
   void pedestriansCallback(const arena_people_msgs::msg::Pedestrians::SharedPtr msg);
 
+  /// Latest roster, nullptr when none was received or it is older than stale_timeout.
+  arena_people_msgs::msg::Pedestrians::SharedPtr currentPedestrians();
+
   /// Maps a normalized cost through cost_scale_ and cost_bias_ onto [0, max_cost_value_].
   unsigned char toCellCost(double normalized_cost) const;
 
@@ -51,11 +55,11 @@ private:
   double stale_timeout_s_{1.0};
   double cost_scale_{1.0};
   double cost_bias_{0.0};
-  bool enabled_{true};
   bool logged_first_message_{false};
 
   PersonalSpaceParams personal_space_params_{};
-  double reach_{2.0};  // max(personal_space_radius_, group_extra_radius_)
+  double reach_{std::max(personal_space_radius_, group_extra_radius_)};
+  Box last_box_{};
 };
 
 }  // namespace arena_social_cost_layer

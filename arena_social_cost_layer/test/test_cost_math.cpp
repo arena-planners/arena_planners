@@ -6,6 +6,7 @@
 using arena_social_cost_layer::ANIM_IDLE;
 using arena_social_cost_layer::ANIM_PANIC;
 using arena_social_cost_layer::ANIM_WALKING;
+using arena_social_cost_layer::Box;
 using arena_social_cost_layer::groupBetweenCost;
 using arena_social_cost_layer::INTERACTION_GROUP_CONVERSATION;
 using arena_social_cost_layer::INTERACTION_HUG;
@@ -14,6 +15,8 @@ using arena_social_cost_layer::INTERACTION_WAVE_AT;
 using arena_social_cost_layer::interactionTypeMultiplier;
 using arena_social_cost_layer::personalSpaceCost;
 using arena_social_cost_layer::pointToSegmentDistSq;
+using arena_social_cost_layer::segmentBox;
+using arena_social_cost_layer::unionBox;
 
 TEST(PersonalSpaceCost, DecaysWithDistance)
 {
@@ -84,4 +87,43 @@ TEST(PointToSegmentDistSq, ZeroOnEndpointsAndSegment)
   EXPECT_NEAR(pointToSegmentDistSq(1.0, 0.0, 0.0, 0.0, 1.0, 0.0), 0.0, 1e-9);
   EXPECT_NEAR(pointToSegmentDistSq(0.5, 0.0, 0.0, 0.0, 1.0, 0.0), 0.0, 1e-9);
   EXPECT_NEAR(pointToSegmentDistSq(0.5, 2.0, 0.0, 0.0, 1.0, 0.0), 4.0, 1e-9);
+}
+
+TEST(SegmentBox, CoversBothEndpointsGrownByReach)
+{
+  const Box box = segmentBox(-1.0, 2.0, 3.0, -0.5, 0.5);
+  EXPECT_DOUBLE_EQ(box.min_x, -1.5);
+  EXPECT_DOUBLE_EQ(box.min_y, -1.0);
+  EXPECT_DOUBLE_EQ(box.max_x, 3.5);
+  EXPECT_DOUBLE_EQ(box.max_y, 2.5);
+}
+
+TEST(SegmentBox, PointIsSquareOfReach)
+{
+  const Box box = segmentBox(1.0, -1.0, 1.0, -1.0, 2.0);
+  EXPECT_DOUBLE_EQ(box.min_x, -1.0);
+  EXPECT_DOUBLE_EQ(box.min_y, -3.0);
+  EXPECT_DOUBLE_EQ(box.max_x, 3.0);
+  EXPECT_DOUBLE_EQ(box.max_y, 1.0);
+}
+
+TEST(UnionBox, EmptyBoxIsIdentity)
+{
+  const Box box = segmentBox(0.0, 0.0, 1.0, 1.0, 0.0);
+  const Box merged = unionBox(Box{}, box);
+  EXPECT_DOUBLE_EQ(merged.min_x, 0.0);
+  EXPECT_DOUBLE_EQ(merged.min_y, 0.0);
+  EXPECT_DOUBLE_EQ(merged.max_x, 1.0);
+  EXPECT_DOUBLE_EQ(merged.max_y, 1.0);
+}
+
+TEST(UnionBox, CoversBothBoxes)
+{
+  const Box a = segmentBox(-2.0, 0.0, -1.0, 0.5, 0.0);
+  const Box b = segmentBox(4.0, -3.0, 5.0, 1.0, 0.0);
+  const Box merged = unionBox(a, b);
+  EXPECT_DOUBLE_EQ(merged.min_x, -2.0);
+  EXPECT_DOUBLE_EQ(merged.min_y, -3.0);
+  EXPECT_DOUBLE_EQ(merged.max_x, 5.0);
+  EXPECT_DOUBLE_EQ(merged.max_y, 1.0);
 }

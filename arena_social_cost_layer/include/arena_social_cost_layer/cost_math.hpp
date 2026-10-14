@@ -136,4 +136,34 @@ inline double groupBetweenCost(
   return amplitude * std::exp(-std::pow(d2 / (2.0 * sigma * sigma), shape));
 }
 
+struct Box
+{
+  double min_x = std::numeric_limits<double>::max();
+  double min_y = std::numeric_limits<double>::max();
+  double max_x = std::numeric_limits<double>::lowest();
+  double max_y = std::numeric_limits<double>::lowest();
+};
+
+/// Box around the segment [(ax,ay),(bx,by)] grown by reach on every side.
+inline Box segmentBox(double ax, double ay, double bx, double by, double reach)
+{
+  Box box;
+  box.min_x = std::min(ax, bx) - reach;
+  box.min_y = std::min(ay, by) - reach;
+  box.max_x = std::max(ax, bx) + reach;
+  box.max_y = std::max(ay, by) + reach;
+  return box;
+}
+
+/// Smallest box holding both, a default-constructed Box is the empty box.
+inline Box unionBox(const Box & a, const Box & b)
+{
+  Box box;
+  box.min_x = std::min(a.min_x, b.min_x);
+  box.min_y = std::min(a.min_y, b.min_y);
+  box.max_x = std::max(a.max_x, b.max_x);
+  box.max_y = std::max(a.max_y, b.max_y);
+  return box;
+}
+
 }  // namespace arena_social_cost_layer

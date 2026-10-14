@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <limits>
-#include <utility>
 #include <vector>
 
 #include "arena_social_cost_layer/cost_math.hpp"
@@ -12,6 +11,60 @@
 
 namespace arena_social_cost_layer
 {
+
+namespace
+{
+
+struct InteractionGroup
+{
+  uint8_t interaction_type;
+  std::vector<size_t> members;
+};
+
+std::vector<InteractionGroup> interactionGroups(const arena_people_msgs::msg::Pedestrians & peds)
+{
+  std::vector<int32_t> ids;
+  std::vector<InteractionGroup> groups;
+  for (size_t idx = 0; idx < peds.pedestrians.size(); ++idx) {
+    const auto & ped = peds.pedestrians[idx];
+    if (ped.interaction_id < 0) {
+      continue;
+    }
+    const auto it = std::find(ids.begin(), ids.end(), ped.interaction_id);
+    if (it == ids.end()) {
+      ids.push_back(ped.interaction_id);
+      groups.push_back({ped.interaction_type, {idx}});
+    } else {
+      groups[std::distance(ids.begin(), it)].members.push_back(idx);
+    }
+  }
+  return groups;
+}
+
+struct CellWindow
+{
+  int i0;
+  int j0;
+  int i1;
+  int j1;
+};
+
+/// Cells of a world box inside the grid and [min_i,max_i) x [min_j,max_j), half-open.
+CellWindow cellWindow(
+  const nav2_costmap_2d::Costmap2D & grid, const Box & box,
+  int min_i, int min_j, int max_i, int max_j)
+{
+  CellWindow w{};
+  grid.worldToMapEnforceBounds(box.min_x, box.min_y, w.i0, w.j0);
+  grid.worldToMapEnforceBounds(box.max_x, box.max_y, w.i1, w.j1);
+  w.i0 = std::max(min_i, w.i0);
+  w.j0 = std::max(min_j, w.j0);
+  w.i1 = std::min(max_i, w.i1 + 1);
+  w.j1 = std::min(max_j, w.j1 + 1);
+  return w;
+}
+
+}  // namespace
 
 void SocialCostLayer::onInitialize()
 {
@@ -91,6 +144,26 @@ void SocialCostLayer::pedestriansCallback(const arena_people_msgs::msg::Pedestri
   }
 }
 
+arena_people_msgs::msg::Pedestrians::SharedPtr SocialCostLayer::currentPedestrians()
+{
+  arena_people_msgs::msg::Pedestrians::SharedPtr peds;
+  {
+    std::lock_guard<std::mutex> lock(peds_mutex_);
+    peds = latest_peds_;
+  }
+  if (!peds) {
+    return nullptr;
+  }
+  if (auto node = node_.lock()) {
+    const rclcpp::Time stamp(peds->header.stamp);
+    const double age = (node->now() - stamp).seconds();
+    if (age > stale_timeout_s_) {
+      return nullptr;
+    }
+  }
+  return peds;
+}
+
 void SocialCostLayer::updateBounds(
   double /*robot_x*/, double /*robot_y*/, double /*robot_yaw*/,
   double * min_x, double * min_y, double * max_x, double * max_y)
@@ -99,33 +172,29 @@ void SocialCostLayer::updateBounds(
     return;
   }
 
-  arena_people_msgs::msg::Pedestrians::SharedPtr peds;
-  {
-    std::lock_guard<std::mutex> lock(peds_mutex_);
-    peds = latest_peds_;
-  }
-  if (!peds) {
-    return;
-  }
-
-  auto node = node_.lock();
-  if (node) {
-    const rclcpp::Time stamp(peds->header.stamp);
-    const double age = (node->now() - stamp).seconds();
-    if (age > stale_timeout_s_) {
-      return;
+  Box box{};
+  if (const auto peds = currentPedestrians()) {
+    for (const auto & ped : peds->pedestrians) {
+      const auto & p = ped.pose.position;
+      box = unionBox(box, segmentBox(p.x, p.y, p.x, p.y, reach_));
+    }
+    for (const auto & group : interactionGroups(*peds)) {
+      for (size_t a = 0; a < group.members.size(); ++a) {
+        for (size_t b = a + 1; b < group.members.size(); ++b) {
+          const auto & pa = peds->pedestrians[group.members[a]].pose.position;
+          const auto & pb = peds->pedestrians[group.members[b]].pose.position;
+          box = unionBox(box, segmentBox(pa.x, pa.y, pb.x, pb.y, group_extra_radius_));
+        }
+      }
     }
   }
 
-  const double reach = reach_;
-  for (const auto & ped : peds->pedestrians) {
-    const double x = ped.pose.position.x;
-    const double y = ped.pose.position.y;
-    *min_x = std::min(*min_x, x - reach);
-    *min_y = std::min(*min_y, y - reach);
-    *max_x = std::max(*max_x, x + reach);
-    *max_y = std::max(*max_y, y + reach);
-  }
+  const Box request = unionBox(box, last_box_);
+  last_box_ = box;
+  *min_x = std::min(*min_x, request.min_x);
+  *min_y = std::min(*min_y, request.min_y);
+  *max_x = std::max(*max_x, request.max_x);
+  *max_y = std::max(*max_y, request.max_y);
 }
 
 void SocialCostLayer::updateCosts(
@@ -135,11 +204,7 @@ void SocialCostLayer::updateCosts(
     return;
   }
 
-  arena_people_msgs::msg::Pedestrians::SharedPtr peds;
-  {
-    std::lock_guard<std::mutex> lock(peds_mutex_);
-    peds = latest_peds_;
-  }
+  const auto peds = currentPedestrians();
   if (!peds || peds->pedestrians.empty()) {
     return;
   }
@@ -152,46 +217,19 @@ void SocialCostLayer::updateCosts(
     return;
   }
 
-  std::vector<std::pair<int32_t, uint8_t>> group_ids;  // (interaction_id, interaction_type)
-  std::vector<std::vector<size_t>> group_members;
-  for (size_t idx = 0; idx < peds->pedestrians.size(); ++idx) {
-    const auto & ped = peds->pedestrians[idx];
-    if (ped.interaction_id < 0) {
-      continue;
-    }
-    auto it = std::find_if(
-      group_ids.begin(), group_ids.end(),
-      [&](const auto & g) {return g.first == ped.interaction_id;});
-    if (it == group_ids.end()) {
-      group_ids.emplace_back(ped.interaction_id, ped.interaction_type);
-      group_members.emplace_back(std::vector<size_t>{idx});
-    } else {
-      group_members[std::distance(group_ids.begin(), it)].push_back(idx);
-    }
-  }
-
-  const double resolution = master_grid.getResolution();
-  const double reach = reach_;
-  const int cell_reach = static_cast<int>(std::ceil(reach / resolution));
-
   for (const auto & ped : peds->pedestrians) {
-    unsigned int mx, my;
-    if (!master_grid.worldToMap(ped.pose.position.x, ped.pose.position.y, mx, my)) {
-      continue;
-    }
-    const int i0 = std::max(min_i, static_cast<int>(mx) - cell_reach);
-    const int i1 = std::min(max_i, static_cast<int>(mx) + cell_reach);
-    const int j0 = std::max(min_j, static_cast<int>(my) - cell_reach);
-    const int j1 = std::min(max_j, static_cast<int>(my) + cell_reach);
+    const auto & p = ped.pose.position;
+    const CellWindow w = cellWindow(
+      master_grid, segmentBox(p.x, p.y, p.x, p.y, reach_), min_i, min_j, max_i, max_j);
 
     const double clip_r2 = personal_space_radius_ * personal_space_radius_;
 
-    for (int j = j0; j < j1; ++j) {
-      for (int i = i0; i < i1; ++i) {
+    for (int j = w.j0; j < w.j1; ++j) {
+      for (int i = w.i0; i < w.i1; ++i) {
         double wx, wy;
         master_grid.mapToWorld(i, j, wx, wy);
-        const double dx = wx - ped.pose.position.x;
-        const double dy = wy - ped.pose.position.y;
+        const double dx = wx - p.x;
+        const double dy = wy - p.y;
         if (dx * dx + dy * dy > clip_r2) {
           continue;
         }
@@ -205,39 +243,28 @@ void SocialCostLayer::updateCosts(
     }
   }
 
-  for (size_t g = 0; g < group_members.size(); ++g) {
-    const auto & members = group_members[g];
-    if (members.size() < 2) {
-      continue;
-    }
-    const uint8_t interaction_type = group_ids[g].second;
+  for (const auto & group : interactionGroups(*peds)) {
+    const auto & members = group.members;
     for (size_t a = 0; a < members.size(); ++a) {
       for (size_t b = a + 1; b < members.size(); ++b) {
         const auto & pa = peds->pedestrians[members[a]].pose.position;
         const auto & pb = peds->pedestrians[members[b]].pose.position;
-
-        unsigned int mx0, my0, mx1, my1;
-        const bool ok0 = master_grid.worldToMap(pa.x, pa.y, mx0, my0);
-        const bool ok1 = master_grid.worldToMap(pb.x, pb.y, mx1, my1);
-        if (!ok0 || !ok1) {
-          continue;
-        }
-        const int i0 = std::max(min_i, static_cast<int>(std::min(mx0, mx1)) - cell_reach);
-        const int i1 = std::min(max_i, static_cast<int>(std::max(mx0, mx1)) + cell_reach);
-        const int j0 = std::max(min_j, static_cast<int>(std::min(my0, my1)) - cell_reach);
-        const int j1 = std::min(max_j, static_cast<int>(std::max(my0, my1)) + cell_reach);
+        const CellWindow w = cellWindow(
+          master_grid, segmentBox(pa.x, pa.y, pb.x, pb.y, group_extra_radius_),
+          min_i, min_j, max_i, max_j);
 
         const double clip_r2 = group_extra_radius_ * group_extra_radius_;
 
-        for (int j = j0; j < j1; ++j) {
-          for (int i = i0; i < i1; ++i) {
+        for (int j = w.j0; j < w.j1; ++j) {
+          for (int i = w.i0; i < w.i1; ++i) {
             double wx, wy;
             master_grid.mapToWorld(i, j, wx, wy);
             if (pointToSegmentDistSq(wx, wy, pa.x, pa.y, pb.x, pb.y) > clip_r2) {
               continue;
             }
             const double cost = groupBetweenCost(
-              wx, wy, pa.x, pa.y, pb.x, pb.y, interaction_type, group_sigma_, falloff_shape_);
+              wx, wy, pa.x, pa.y, pb.x, pb.y, group.interaction_type, group_sigma_,
+              falloff_shape_);
             const unsigned char cell_cost = toCellCost(cost);
             const unsigned char existing = master_grid.getCost(i, j);
             if (existing == nav2_costmap_2d::NO_INFORMATION || cell_cost > existing) {
