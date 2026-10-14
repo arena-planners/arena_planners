@@ -21,16 +21,16 @@ void SocialCostLayer::onInitialize()
   }
 
   declareParameter("enabled", rclcpp::ParameterValue(true));
-  declareParameter("peds_topic", rclcpp::ParameterValue(std::string("arena_peds")));
-  declareParameter("personal_space_radius", rclcpp::ParameterValue(1.0));
-  declareParameter("personal_space_sigma", rclcpp::ParameterValue(0.35));
-  declareParameter("group_extra_radius", rclcpp::ParameterValue(1.0));
-  declareParameter("group_sigma", rclcpp::ParameterValue(0.4));
-  declareParameter("falloff_shape", rclcpp::ParameterValue(2.0));
-  declareParameter("max_cost_value", rclcpp::ParameterValue(200));
-  declareParameter("stale_timeout", rclcpp::ParameterValue(1.0));
-  declareParameter("cost_scale", rclcpp::ParameterValue(1.0));
-  declareParameter("cost_bias", rclcpp::ParameterValue(0.0));
+  declareParameter("peds_topic", rclcpp::ParameterValue(peds_topic_));
+  declareParameter("personal_space_radius", rclcpp::ParameterValue(personal_space_radius_));
+  declareParameter("personal_space_sigma", rclcpp::ParameterValue(personal_space_sigma_));
+  declareParameter("group_extra_radius", rclcpp::ParameterValue(group_extra_radius_));
+  declareParameter("group_sigma", rclcpp::ParameterValue(group_sigma_));
+  declareParameter("falloff_shape", rclcpp::ParameterValue(falloff_shape_));
+  declareParameter("max_cost_value", rclcpp::ParameterValue(static_cast<int>(max_cost_value_)));
+  declareParameter("stale_timeout", rclcpp::ParameterValue(stale_timeout_s_));
+  declareParameter("cost_scale", rclcpp::ParameterValue(cost_scale_));
+  declareParameter("cost_bias", rclcpp::ParameterValue(cost_bias_));
 
   node->get_parameter(name_ + ".enabled", enabled_);
   node->get_parameter(name_ + ".peds_topic", peds_topic_);
@@ -41,24 +41,26 @@ void SocialCostLayer::onInitialize()
   node->get_parameter(name_ + ".falloff_shape", falloff_shape_);
   int max_cost_param = max_cost_value_;
   node->get_parameter(name_ + ".max_cost_value", max_cost_param);
-  max_cost_value_ = static_cast<unsigned char>(
-    std::clamp(max_cost_param, 0, static_cast<int>(nav2_costmap_2d::LETHAL_OBSTACLE) - 1));
+  constexpr int kMaxCost = static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) - 1;
+  max_cost_value_ = static_cast<unsigned char>(std::clamp(max_cost_param, 0, kMaxCost));
   node->get_parameter(name_ + ".stale_timeout", stale_timeout_s_);
   node->get_parameter(name_ + ".cost_scale", cost_scale_);
   node->get_parameter(name_ + ".cost_bias", cost_bias_);
 
-  constexpr double kAlertSigmaRatio = 0.75 / 0.45;
-  constexpr double kDangerSigmaRatio = 1.2 / 0.45;
+  const PersonalSpaceParams defaults{};
+  const double sigma_scale = personal_space_sigma_ / defaults.base_sigma;
   personal_space_params_.base_sigma = personal_space_sigma_;
-  personal_space_params_.alert_sigma = personal_space_sigma_ * kAlertSigmaRatio;
-  personal_space_params_.danger_sigma = personal_space_sigma_ * kDangerSigmaRatio;
+  personal_space_params_.alert_sigma = defaults.alert_sigma * sigma_scale;
+  personal_space_params_.danger_sigma = defaults.danger_sigma * sigma_scale;
   personal_space_params_.shape = falloff_shape_;
 
   reach_ = std::max(personal_space_radius_, group_extra_radius_);
 
+  auto sub_opt = rclcpp::SubscriptionOptions();
+  sub_opt.callback_group = callback_group_;
   peds_sub_ = node->create_subscription<arena_people_msgs::msg::Pedestrians>(
     peds_topic_, rclcpp::SensorDataQoS(),
-    std::bind(&SocialCostLayer::pedestriansCallback, this, std::placeholders::_1));
+    std::bind(&SocialCostLayer::pedestriansCallback, this, std::placeholders::_1), sub_opt);
 
   RCLCPP_INFO(
     node->get_logger(), "SocialCostLayer '%s' initialized: enabled=%s, subscribing to '%s' "
