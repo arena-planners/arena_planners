@@ -1,0 +1,6 @@
+<library path="arena_social_cost_layer">
+  <class name="arena_social_cost_layer/SocialCostLayer" type="arena_social_cost_layer::SocialCostLayer"
+         base_class_type="nav2_costmap_2d::Layer">
+    <description>Personal-space and interaction-group cost from arena_peds (arena_people_msgs/Pedestrians).</description>
+  </class>
+</library>
