@@ -356,10 +356,9 @@ class PlannerEdgeNode(ArenaMixinNode):
         if self._control_push is not None and self._dead is None:
             try:
                 self._control_push.send_frame(encode_frame(Shutdown()))
-                if self._control_pull is not None and self._control_pull.poll(500):
-                    bye = decode_frame(self._control_pull.recv_frame())
-                    if not isinstance(bye, Bye):
-                        self.get_logger().warning(f"expected bye, got {bye!r}")
+                bye = await self._await_bye(0.5)
+                if bye is not None and not isinstance(bye, Bye):
+                    self.get_logger().warning(f"expected bye, got {bye!r}")
             except Exception as exc:
                 self.get_logger().warning(f"shutdown handshake failed: {exc}")
 
@@ -380,6 +379,16 @@ class PlannerEdgeNode(ArenaMixinNode):
 
         if rc not in (0, -signal.SIGTERM, -signal.SIGKILL):
             raise RuntimeError(f"planner subprocess exited with code {rc}")
+
+    async def _await_bye(self, timeout_s: float) -> Frame | None:
+        """The planner's reply to Shutdown, read through the I/O thread while it owns control_pull."""
+        if self._io_thread is not None and self._io_thread.is_alive():
+            with contextlib.suppress(TimeoutError):
+                return await asyncio.wait_for(self._ack_queue.get(), timeout=timeout_s)
+            return None
+        if self._control_pull is not None and self._control_pull.poll(round(timeout_s * 1000)):
+            return decode_frame(self._control_pull.recv_frame())
+        return None
 
     # ------------------------------------------------------------------
     # I/O thread
