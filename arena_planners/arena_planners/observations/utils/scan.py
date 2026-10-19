@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 _TAU = 2.0 * np.pi
 
@@ -12,7 +13,7 @@ def _wrap(a: np.ndarray) -> np.ndarray:
 
 
 def canonical_scan(
-    ranges: np.ndarray,
+    ranges: ArrayLike,
     angle_min: float,
     angle_increment: float,
     range_min: float,

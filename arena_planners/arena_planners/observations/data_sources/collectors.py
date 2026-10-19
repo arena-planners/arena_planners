@@ -179,7 +179,9 @@ class ImageCollector(Collector[sensor_msgs.Image, ImageData]):
     ) -> None:
         super().__init__(name, topic, **kwargs)
         self._expected_encoding = encoding
-        self._output_size = tuple(output_size) if output_size is not None else None
+        self._output_size: tuple[int, int] | None = (
+            (output_size[0], output_size[1]) if output_size is not None else None
+        )
         self._normalize = normalize
 
     def _preprocess(self, msg: sensor_msgs.Image) -> ImageData:
@@ -214,7 +216,9 @@ class CompressedImageCollector(Collector[sensor_msgs.CompressedImage, ImageData]
         **kwargs,
     ) -> None:
         super().__init__(name, topic, **kwargs)
-        self._output_size = tuple(output_size) if output_size is not None else None
+        self._output_size: tuple[int, int] | None = (
+            (output_size[0], output_size[1]) if output_size is not None else None
+        )
         self._normalize = normalize
 
     def _preprocess(self, msg: sensor_msgs.CompressedImage) -> ImageData:

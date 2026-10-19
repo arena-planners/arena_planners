@@ -175,7 +175,7 @@ def encode_frame(frame: Frame) -> bytes:
         if field.name == "op":
             continue
         payload[field.name] = getattr(frame, field.name)
-    return msgpack.packb(payload, use_bin_type=True, default=msgpack_numpy.encode)
+    return msgpack.packb(payload, use_bin_type=True, default=msgpack_numpy.encode)  # pyright: ignore[reportReturnType]
 
 
 def decode_frame(buf: bytes) -> Frame:

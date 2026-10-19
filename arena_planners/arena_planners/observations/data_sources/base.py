@@ -135,7 +135,7 @@ class Generator(Generic[ProcessedDataType], DataSource):  # noqa: UP046
         self.required_keys = list(self.requires.keys())
 
     @abstractmethod
-    def _generate(self, **kwargs: Any) -> ProcessedDataType: ...
+    def _generate(self, **kwargs: Any) -> ProcessedDataType | None: ...
 
     def reset(self) -> None:
         return None

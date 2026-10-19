@@ -15,6 +15,7 @@ import uuid
 
 import geometry_msgs.msg
 import numpy as np
+import rclpy.publisher
 import rclpy.qos
 import yaml
 from arena_rclpy_mixins import ArenaMixinNode
@@ -537,6 +538,7 @@ class PlannerEdgeNode(ArenaMixinNode):
 
     async def _follow_loop(self, done: asyncio.Event) -> None:
         """Drive the move or chunk in progress at the follow rate, so a slow planner's robot keeps its command alive."""
+        assert self._obs_manager is not None
         with self.sim_time_rate(1.0 / self._follow_interval) as (_, events):
             while not done.is_set():
                 await events.get()
@@ -722,7 +724,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         pose = self._robot_pose(features)
         if command and pose is None:
             self.get_logger().warning(f"cannot start discrete {command!r}: robot_pose missing or malformed")
-        elif command:
+        elif command and pose is not None:
             t_s = self.sim_time.to_seconds()
             try:
                 move = start_move(command, pose, t_s, self._primitives, self._move_limits, amount)

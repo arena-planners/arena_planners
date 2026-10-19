@@ -197,7 +197,7 @@ def endpoints_from_env() -> tuple[str, str, str, str]:
     missing = [name for index, name in enumerate(_ENV_VARS) if values[index] is None]
     if missing:
         raise RuntimeError(f"Missing required environment variable(s): {', '.join(missing)}")
-    obs, action, control, ctrl_ack = values
+    obs, action, control, ctrl_ack = (os.environ[name] for name in _ENV_VARS)
     return obs, action, control, ctrl_ack
 
 
