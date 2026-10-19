@@ -28,6 +28,10 @@ The `robot.mobile:=drl` adapter (in Arena's `task_generator`) spawns the planner
 2. Register it in this repo's `.gitmodules` with a `planner = <name>` tag.
 3. From Arena: `arena feature planners add <name>` initializes the submodule and fetches and verifies the weights declared in `weights.yaml`, if present. For a gated Hugging Face repo the fetch names the page where the terms are accepted and stops for that planner. Accept them, log in with `hf auth login` (or set `HF_TOKEN`) and run the command again.
 
+## MCP domain
+
+`arena_planners/arena_planners/mcp.py` contributes the `planners` domain to the Arena MCP server (`python3 -m arena_mcp ls planners` lists its tools). It reads the same registry and resolver as the CLI: every registry planner with its kind, submodule status, `planner.yaml` summary and weights presence, the full manifest with its resolution, and the structured `arena feature planners check` verdict plus sha256 verification of `weights.yaml`. The rosnav_rl agents and nav2 controllers the resolver accepts come with the listing. Adding, installing, updating and removing planner submodules and fetching weights run the real CLI verbs as jobs, polled with `jobs_status` and stopped with `jobs_cancel`. The preflight soak belongs to the evaluation domain.
+
 ## License
 
 MIT. Per-planner submodules carry their own upstream licenses (drlvo: GPL-3.0, crowdnav: MIT).

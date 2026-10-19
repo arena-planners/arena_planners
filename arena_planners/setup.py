@@ -15,5 +15,8 @@ setup(
         "console_scripts": [
             "cohan_peds_bridge = arena_planners.cohan_peds_bridge:main",
         ],
+        "arena_mcp.domains": [
+            "planners = arena_planners.mcp:domain",
+        ],
     },
 )
