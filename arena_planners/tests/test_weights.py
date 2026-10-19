@@ -300,3 +300,12 @@ def test_sha256_file_streams_across_blocks(tmp_path: Path):
     path = tmp_path / "big.bin"
     path.write_bytes(data)
     assert weights.sha256_file(path) == _sha(data)
+
+
+@pytest.mark.parametrize(
+    "planner_dir",
+    sorted(p.parent for p in (Path(__file__).resolve().parents[2] / "planners").glob("*/weights.yaml")),
+    ids=lambda p: p.name,
+)
+def test_checked_out_planner_manifest_is_valid(planner_dir: Path):
+    weights.read(planner_dir)
