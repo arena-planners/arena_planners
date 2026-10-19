@@ -10,7 +10,7 @@ import urllib.request
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import NamedTuple
+from typing import NamedTuple, NotRequired, TypedDict
 
 _MANIFEST = "weights.yaml"
 _BLOCK = 8 << 20
@@ -48,6 +48,12 @@ class Entry:
     filename: str | None = None
     revision: str | None = None
     url: str | None = None
+
+
+class HfKwargs(TypedDict):
+    repo_id: str
+    filename: str
+    revision: NotRequired[str]
 
 
 class Fetched(NamedTuple):
@@ -148,9 +154,10 @@ def http_url(url: str) -> str:
     return url
 
 
-def hf_kwargs(entry: Entry) -> dict[str, str]:
+def hf_kwargs(entry: Entry) -> HfKwargs:
     """Keyword arguments for `hf_hub_download` and `try_to_load_from_cache`."""
-    kwargs = {"repo_id": entry.repo, "filename": entry.filename}
+    assert entry.repo is not None and entry.filename is not None
+    kwargs: HfKwargs = {"repo_id": entry.repo, "filename": entry.filename}
     if entry.revision:
         kwargs["revision"] = entry.revision
     return kwargs
@@ -216,6 +223,7 @@ def _download(url: str, blob: Path, sha: str) -> None:
 
 
 def _fetch_url(entry: Entry, cache: Path) -> tuple[Path, str]:
+    assert entry.url is not None
     cache.mkdir(parents=True, exist_ok=True)
     blob = cache / entry.sha256
     marker = cache / (entry.sha256 + _OK)

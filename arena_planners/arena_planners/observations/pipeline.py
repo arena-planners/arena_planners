@@ -12,7 +12,6 @@ already exist via the Generator base class in data_sources.base).
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from typing import Any
 
 from arena_rclpy_mixins import Namespace
@@ -34,7 +33,7 @@ from .data_sources.collectors import (
 from .data_sources.subgoal import SubgoalGenerator
 from .data_sources.tf import RobotPoseTFGenerator
 
-_TYPE_REGISTRY: dict[str, Callable[..., DataSource]] = {
+_TYPE_REGISTRY: dict[str, type[DataSource]] = {
     "sensor_msgs/LaserScan": LaserScanCollector,
     "sensor_msgs/Image": ImageCollector,
     "sensor_msgs/CompressedImage": CompressedImageCollector,

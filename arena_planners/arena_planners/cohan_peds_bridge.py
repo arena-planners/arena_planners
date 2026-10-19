@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import math
+import typing
 
 import rclpy
+import rclpy.duration
+import rclpy.time
 import tf2_ros
 from arena_people_msgs.msg import Pedestrians
 from arena_rclpy_mixins.spin import spin_node
 from cohan_msgs.msg import AgentType, TrackedAgent, TrackedAgents, TrackedSegment, TrackedSegmentType
-from geometry_msgs.msg import PoseStamped, PoseWithCovariance, TwistWithCovariance
+from geometry_msgs.msg import PoseStamped, PoseWithCovariance, TransformStamped, Twist, TwistWithCovariance
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from tf2_geometry_msgs import do_transform_pose_stamped
@@ -18,8 +21,8 @@ _MOVING_THRESHOLD: float = 0.1
 
 
 def _rotate_twist_by_tf(
-    twist: object,
-    tf: object,
+    twist: Twist,
+    tf: TransformStamped,
 ) -> TwistWithCovariance:
     q = tf.transform.rotation
     x, y, z, w = q.x, q.y, q.z, q.w
@@ -47,8 +50,10 @@ class CohanPedsBridge(Node):
     def __init__(self) -> None:
         super().__init__("cohan_peds_bridge")
 
-        self._target_frame: str = self.declare_parameter("target_frame", "map").value
-        self._source_frame_fallback: str = self.declare_parameter("source_frame_fallback", "map").value
+        self._target_frame: str = typing.cast(str, self.declare_parameter("target_frame", "map").value)
+        self._source_frame_fallback: str = typing.cast(
+            str, self.declare_parameter("source_frame_fallback", "map").value
+        )
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
@@ -75,7 +80,7 @@ class CohanPedsBridge(Node):
             tf = self._tf_buffer.lookup_transform(
                 self._target_frame,
                 source_frame,
-                stamp,
+                rclpy.time.Time.from_msg(stamp),
                 timeout=rclpy.duration.Duration(seconds=0.0),
             )
         except Exception as exc:

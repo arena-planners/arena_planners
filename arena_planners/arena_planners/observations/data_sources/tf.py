@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 import rclpy
 import rclpy.duration
+import rclpy.node
 import rclpy.time
 import tf2_ros
 
