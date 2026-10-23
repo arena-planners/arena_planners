@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import configparser
-import subprocess
 from pathlib import Path
 
 _SDK = "arena_planners"
@@ -68,22 +67,15 @@ def all_planners(root: Path) -> list[str]:
 
 
 def submodule_status(root: Path) -> dict[str, str]:
-    """Submodule path -> 'init' | 'uninit' from git submodule status --recursive."""
-    out = subprocess.run(
-        ["git", "submodule", "status", "--recursive"],
-        cwd=root,
-        text=True,
-        capture_output=True,
-        check=False,
-    ).stdout
+    """Submodule path -> 'init' | 'uninit' per arena_planners/.gitmodules entry, 'init' when the path holds a `.git`."""
+    cfg = configparser.ConfigParser()
+    cfg.read(root / _SDK / ".gitmodules")
     status: dict[str, str] = {}
-    for line in out.splitlines():
-        if not line:
-            continue
-        parts = line[1:].split()
-        if len(parts) < 2:
-            continue
-        status[parts[1]] = "uninit" if line[0] == "-" else "init"
+    for section in cfg.sections():
+        path = cfg[section].get("path", "").strip()
+        if section.startswith("submodule ") and path:
+            rel = f"{_SDK}/{path}"
+            status[rel] = "init" if (root / rel / ".git").exists() else "uninit"
     return status
 
 

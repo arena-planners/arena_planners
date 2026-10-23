@@ -144,7 +144,7 @@ class PlannerSDK:
         try:
             step = self._as_step(step_fn(frame.features))
         except Exception as exc:
-            self._send_data(Error(code="step_failed", msg=str(exc), severity="error"))
+            self._send_data(Error(code="step_failed", msg=repr(exc), severity="error"))
             raise
         self._send_data(
             Action(

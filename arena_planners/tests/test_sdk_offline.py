@@ -275,6 +275,30 @@ class TestSignal:
         assert action.signal == signal
 
 
+@pytest.mark.parametrize(
+    ("exc", "msg"), [(StopIteration(), "StopIteration()"), (ValueError("boom"), "ValueError('boom')")]
+)
+def test_step_failure_names_the_exception(tmp_path, exc: Exception, msg: str) -> None:
+    edge = _edge_sockets(tmp_path)
+    sdk = PlannerSDK(manifest={"action_type": "differential_drive", "heartbeat_period_s": 0.0})
+
+    def fail(_features: dict) -> list[float]:
+        raise exc
+
+    try:
+        sdk._handle_control(Reset(episode_id="e1"), None, None)
+        assert isinstance(_recv(edge["ctrl_ack"]), ResetAck)
+        with pytest.raises(type(exc)):
+            sdk._handle_obs(Obs(seq=1, features={}), fail)
+        frame = _recv(edge["action"])
+    finally:
+        _close(sdk)
+        for transport in edge.values():
+            transport.close()
+    assert isinstance(frame, Error)
+    assert (frame.code, frame.msg) == ("step_failed", msg)
+
+
 def test_step_defaults() -> None:
     assert Step() == Step(action=[], command="", signal="", amount=0.0, chunk=[])
     assert Step([0.1, 0.2], signal="arrived") == Step(action=[0.1, 0.2], command="", signal="arrived")

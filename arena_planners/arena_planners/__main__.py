@@ -19,7 +19,7 @@ def cmd_ls(args: argparse.Namespace) -> int:
         if name in local:
             print(f"[x] {name} (local)")
             continue
-        pending = any(status.get(p) == "uninit" for p in paths[name])
+        pending = not all(status.get(p) == "init" for p in paths[name])
         suffix = " (nav2)" if kinds.get(name) == "nav2" else ""
         print(f"{'[ ]' if pending else '[x]'} {name}{suffix}")
     return 0
