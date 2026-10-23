@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -28,6 +29,8 @@ domain = Domain(
     Submodule and weights operations run as jobs, poll them with jobs_status.""",
     check=_unlocatable,
 )
+
+_CHECK_LINE = re.compile(r"\[(?P<mark>[ x])\] (?P<planner>[^:]+): (?P<path>\S+)")
 
 
 def _root() -> Path:
@@ -75,7 +78,6 @@ def _entry(
         "name": name,
         "kind": kinds.get(name, "bridge"),
         "local": name in local,
-        "ready": name in local or all(state == "init" for state in submodules.values()),
         "submodules": submodules,
         "dir": str(pdir) if pdir is not None else None,
     }
@@ -190,56 +192,32 @@ def planners_manifest(name: str) -> dict[str, object]:
 
 
 @domain.tool(read_only=True)
-def planners_check(
-    name: Annotated[str | None, Field(description="one registry planner, default every registered one")] = None,
-    verify_weights: Annotated[
-        bool,
-        Field(
-            description="sha256-check declared weights of checked-out planners, slow on the first check of large files"
-        ),
-    ] = True,
-) -> dict[str, object]:
-    """Submodule initialization per planner as `arena feature planners check` reports it, plus missing weights."""
-    root = _root()
-    subs = registry.submodule_paths(root)
-    status = registry.submodule_status(root)
-    if name is not None:
-        _known(root, name)
-        names = [name]
-    else:
-        names = sorted(subs)
-    planners: list[dict[str, object]] = []
-    for planner in names:
-        paths = [{"path": path, "initialized": status.get(path) == "init"} for path in subs.get(planner, [])]
-        entry: dict[str, object] = {
-            "planner": planner,
-            "submodules": paths,
-            "ok": all(path["initialized"] for path in paths),
-        }
-        pdir = registry.planner_dir(planner, root)
-        if verify_weights and entry["ok"] and pdir is not None:
-            try:
-                missing = weights.missing(pdir)
-            except weights.ManifestError as exc:
-                entry["weights_error"] = str(exc)
-                entry["ok"] = False
-            else:
-                entry["weights_missing"] = missing
-                entry["ok"] = not missing
-        planners.append(entry)
-    return {"ok": all(entry["ok"] for entry in planners), "planners": planners}
+def planners_check() -> dict[str, object]:
+    """Submodule initialization per planner as `arena feature planners check` prints it, ok when it exits 0."""
+    done = cli.run("feature", "planners", "check", check=False)
+    planners: dict[str, list[dict[str, object]]] = {}
+    for line in done["stdout"].splitlines():
+        match = _CHECK_LINE.match(line)
+        if match is not None:
+            planners.setdefault(match["planner"], []).append(
+                {"path": match["path"], "initialized": match["mark"] == "x"}
+            )
+    if done["exit_code"] not in (0, 1) or (done["exit_code"] == 1 and not planners):
+        tail = (done["stderr"] or done["stdout"]).strip().splitlines()[-15:]
+        raise ToolError(f"{done['command']} failed with exit code {done['exit_code']}:\n" + "\n".join(tail))
+    return {
+        "ok": done["exit_code"] == 0,
+        "planners": [
+            {"planner": name, "submodules": paths, "ok": all(path["initialized"] for path in paths)}
+            for name, paths in sorted(planners.items())
+        ],
+    }
 
 
 @domain.tool(destructive=True, open_world=True)
 async def planners_add(name: str) -> dict[str, object]:
     """Job running `arena feature planners add <name>`: clone its submodules, fetch its weights, then deps and build."""
     return await _verb("add", name)
-
-
-@domain.tool(destructive=True, open_world=True)
-async def planners_install(name: str) -> dict[str, object]:
-    """Job running `arena feature planners install <name>`, the alias of add: clone, fetch weights, deps and build."""
-    return await _verb("install", name)
 
 
 @domain.tool(destructive=True, open_world=True)

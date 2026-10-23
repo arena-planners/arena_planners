@@ -6,14 +6,13 @@ import pytest
 
 pytest.importorskip("arena_mcp")
 
-from arena_mcp.core import ToolError
+from arena_mcp.core import ToolError, cli
 
 from arena_planners import goal, registry, resolver, weights
 from arena_planners.mcp import (
     planners_add,
     planners_check,
     planners_fetch_weights,
-    planners_install,
     planners_list,
     planners_manifest,
     planners_rm,
@@ -101,34 +100,28 @@ def test_manifest_matches_the_planner_yaml_and_weights_yaml():
 def test_manifest_and_jobs_refuse_an_unknown_planner():
     with pytest.raises(ToolError, match="planners_list"):
         planners_manifest("no_such_planner")
-    for start in (planners_add, planners_install, planners_rm, planners_fetch_weights):
+    for start in (planners_add, planners_rm, planners_fetch_weights):
         with pytest.raises(ToolError, match="no planner"):
             asyncio.run(start("no_such_planner"))
 
 
-def test_check_reports_submodule_initialization_per_planner():
+@pytest.mark.skipif(not cli.sourced(), reason="needs a shell that sourced arena")
+def test_check_reports_what_the_cli_prints_per_planner():
     status = registry.submodule_status(ROOT)
-    out = planners_check(verify_weights=False)
     subs = registry.submodule_paths(ROOT)
-    assert [entry["planner"] for entry in out["planners"]] == sorted(subs)
+    out = planners_check()
+    assert [entry["planner"] for entry in out["planners"]] == sorted(name for name, paths in subs.items() if paths)
     for entry in out["planners"]:
-        expected = [{"path": path, "initialized": status.get(path) == "init"} for path in subs[entry["planner"]]]
+        paths = subs[entry["planner"]]
+        pending = [path for path in paths if status.get(path) != "init"]
+        expected = (
+            [{"path": path, "initialized": False} for path in pending]
+            if pending
+            else [{"path": path, "initialized": True} for path in paths]
+        )
         assert entry["submodules"] == expected
-        assert entry["ok"] == all(path["initialized"] for path in expected)
+        assert entry["ok"] == (not pending)
     assert out["ok"] == all(entry["ok"] for entry in out["planners"])
-
-
-def test_check_of_one_planner_verifies_its_weights():
-    ready = [name for name in _with_manifest() if name in registry.submodule_paths(ROOT)]
-    ready = [name for name in ready if planners_check(name, verify_weights=False)["ok"]]
-    if not ready:
-        pytest.skip("no initialized registry planner is checked out")
-    name = ready[0]
-    out = planners_check(name)
-    assert [entry["planner"] for entry in out["planners"]] == [name]
-    entry = out["planners"][0]
-    assert entry["weights_missing"] == weights.missing(registry.planner_dir(name, ROOT))
-    assert entry["ok"] == (not entry["weights_missing"])
 
 
 def test_domain_serves_every_tool_through_the_server():
