@@ -107,6 +107,12 @@
 	planner = sonic
 	branch = master
 	update = rebase
+[submodule "planners/hmpnav"]
+	path = planners/hmpnav
+	url = https://github.com/arena-planners/hmpnav.git
+	planner = hmpnav
+	branch = master
+	update = rebase
 [submodule "vln/cma"]
 	path = planners/cma
 	url = https://github.com/arena-planners/cma.git
