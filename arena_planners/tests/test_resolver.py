@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+
 import pytest
 
 import arena_planners.resolver as _resolver_mod
@@ -10,7 +15,6 @@ from arena_planners.resolver import (
     ResolverError,
     installed_in_registry,
     list_available,
-    nav2_diagnostics,
     planner_dir,
     resolve,
 )
@@ -18,6 +22,19 @@ from arena_planners.resolver import (
 
 def _has_ament_index() -> bool:
     return _resolver_mod._ament_available
+
+
+def _without_ament(code: str, **env: str) -> subprocess.CompletedProcess:
+    prelude = "import sys; sys.modules['ament_index_python'] = None; from arena_planners import resolver; "
+    command = [sys.executable, "-W", "always", "-c", prelude + code]
+    return subprocess.run(command, capture_output=True, text=True, check=True, env={**os.environ, **env})
+
+
+def _index(monkeypatch, prefix, pkg: str) -> None:
+    marker = prefix / "share" / "ament_index" / "resource_index" / "packages" / pkg
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("")
+    monkeypatch.setenv("AMENT_PREFIX_PATH", str(prefix))
 
 
 _GITMODULES = """\
@@ -208,48 +225,32 @@ def test_submodule_without_planner_py_listed_but_raises_on_resolve(tmp_path):
         resolve("ghost_planner", workspace_root=tmp_path)
 
 
-def test_nav2_controllers_empty_when_ament_unavailable(monkeypatch, ws):
-    """_nav2_controllers() returns [] and warns once when ament_index_python is absent."""
-    monkeypatch.setattr(_resolver_mod, "_ament_available", False)
-    monkeypatch.setattr(_resolver_mod, "_WARN_ONCE_SENTINEL", [])
-    with pytest.warns(UserWarning, match="ament_index_python not available"):
-        result = _resolver_mod._nav2_controllers()
-    assert result == []
+def test_nav2_controllers_empty_when_ament_unavailable():
+    """_nav2_controllers() returns [] and warns when ament_index_python is absent."""
+    done = _without_ament("print(resolver._nav2_controllers())")
+    assert done.stdout.strip() == "[]"
+    assert "ament_index_python not available" in done.stderr
 
 
-def test_nav2_controllers_empty_no_double_warn(monkeypatch, ws):
-    """Second call does not emit another warning when sentinel is already set."""
-    monkeypatch.setattr(_resolver_mod, "_ament_available", False)
-    monkeypatch.setattr(_resolver_mod, "_WARN_ONCE_SENTINEL", [True])
-    import warnings as _warnings
-
-    with _warnings.catch_warnings():
-        _warnings.simplefilter("error")
-        result = _resolver_mod._nav2_controllers()
-    assert result == []
+def test_nav2_controllers_empty_warns_once():
+    """Repeated calls without ament_index_python warn a single time."""
+    done = _without_ament("resolver._nav2_controllers(); resolver._nav2_controllers()")
+    assert done.stderr.count("ament_index_python not available") == 1
 
 
-def test_nav2_plugins_debug_env(monkeypatch, capsys):
+def test_nav2_plugins_debug_env():
     """Setting ARENA_PLANNERS_RESOLVER_DEBUG=1 with no ament emits at least one debug line."""
-    monkeypatch.setenv("ARENA_PLANNERS_RESOLVER_DEBUG", "1")
-    monkeypatch.setattr(_resolver_mod, "_ament_available", False)
-    monkeypatch.setattr(_resolver_mod, "_WARN_ONCE_SENTINEL", [True])
-    _resolver_mod._nav2_plugins()
-    captured = capsys.readouterr()
-    assert "[arena_planners.resolver]" in captured.err
+    done = _without_ament("resolver._nav2_plugins()", ARENA_PLANNERS_RESOLVER_DEBUG="1")
+    assert "[arena_planners.resolver]" in done.stderr
 
 
-def test_nav2_diagnostics_structure(monkeypatch):
-    """nav2_diagnostics() returns the expected keys and types."""
-    monkeypatch.setattr(_resolver_mod, "_ament_available", False)
-    monkeypatch.setattr(_resolver_mod, "_WARN_ONCE_SENTINEL", [True])
-    result = nav2_diagnostics()
-    assert "ament_available" in result
-    assert "scanned_packages" in result
-    assert "controllers" in result
+def test_nav2_diagnostics_structure():
+    """nav2_diagnostics() reports no packages and no controllers without ament_index_python."""
+    done = _without_ament("print(__import__('json').dumps(resolver.nav2_diagnostics()))")
+    result = json.loads(done.stdout)
     assert result["ament_available"] is False
     assert result["scanned_packages"] == 0
-    assert isinstance(result["controllers"], list)
+    assert result["controllers"] == []
 
 
 def _make_fake_nav2_plugin_xml(tmp_path, class_name: str, base_class: str) -> str:
@@ -278,22 +279,19 @@ def _make_fake_package_xml(tmp_path, pkg_name: str, plugin_xml_path: str) -> Non
     (share / "package.xml").write_text(content)
 
 
+@pytest.mark.skipif(not _has_ament_index(), reason="ament_index_python not available")
 def test_nav2_plugins_controller_kind(monkeypatch, tmp_path):
     """A Controller plugin is discovered with kind='controller'."""
     plugin_xml = _make_fake_nav2_plugin_xml(tmp_path, "my_pkg::MyController", "nav2_core::Controller")
     _make_fake_package_xml(tmp_path, "my_pkg", plugin_xml)
 
-    monkeypatch.setattr(_resolver_mod, "_ament_available", True)
-
-    def fake_packages():
-        return {"my_pkg": str(tmp_path)}
-
-    monkeypatch.setattr(_resolver_mod, "_get_packages_with_prefixes", fake_packages)
+    _index(monkeypatch, tmp_path, "my_pkg")
 
     plugins = _resolver_mod._nav2_plugins()
     assert any(p.class_name == "my_pkg::MyController" and p.kind == "controller" for p in plugins)
 
 
+@pytest.mark.skipif(not _has_ament_index(), reason="ament_index_python not available")
 def test_nav2_plugins_base_class_fallback(monkeypatch, tmp_path):
     """Plugin XML using 'base_class' (older manifests) is still recognized."""
     content = """<library path="fake_lib">
@@ -305,17 +303,13 @@ def test_nav2_plugins_base_class_fallback(monkeypatch, tmp_path):
     plugin_xml.write_text(content)
     _make_fake_package_xml(tmp_path, "old_pkg", str(plugin_xml))
 
-    monkeypatch.setattr(_resolver_mod, "_ament_available", True)
-
-    def fake_packages():
-        return {"old_pkg": str(tmp_path)}
-
-    monkeypatch.setattr(_resolver_mod, "_get_packages_with_prefixes", fake_packages)
+    _index(monkeypatch, tmp_path, "old_pkg")
 
     plugins = _resolver_mod._nav2_plugins()
     assert any(p.class_name == "old_pkg::OldController" and p.kind == "controller" for p in plugins)
 
 
+@pytest.mark.skipif(not _has_ament_index(), reason="ament_index_python not available")
 def test_nav2_plugins_prefix_substitution(monkeypatch, tmp_path):
     """${prefix} in package.xml resolves to <prefix>/share/<pkg_name>, not just <prefix>."""
     pkg_name = "fake_ctrl_pkg"
@@ -336,12 +330,7 @@ def test_nav2_plugins_prefix_substitution(monkeypatch, tmp_path):
 </package>"""
     (share / "package.xml").write_text(pkg_xml_content)
 
-    monkeypatch.setattr(_resolver_mod, "_ament_available", True)
-
-    def fake_packages():
-        return {pkg_name: str(tmp_path)}
-
-    monkeypatch.setattr(_resolver_mod, "_get_packages_with_prefixes", fake_packages)
+    _index(monkeypatch, tmp_path, pkg_name)
 
     plugins = _resolver_mod._nav2_plugins()
     assert any(p.class_name == "fake_ctrl_pkg::FakeController" for p in plugins)
