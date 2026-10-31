@@ -71,10 +71,19 @@ def test_reset_none_initial_state():
     assert result.initial_state is None
 
 
-def test_reset_ack_roundtrip():
-    frame = ResetAck()
-    result = _roundtrip(frame)
-    assert result.op == "reset_ack"
+@pytest.mark.parametrize(
+    ("frame", "op"),
+    [
+        (ResetAck(), "reset_ack"),
+        (Cancel(), "cancel"),
+        (CancelAck(), "cancel_ack"),
+        (Shutdown(), "shutdown"),
+        (Bye(), "bye"),
+    ],
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_empty_frame_roundtrip(frame, op):
+    assert _roundtrip(frame).op == op
 
 
 def test_obs_roundtrip_scalars():
@@ -182,65 +191,19 @@ def test_action_defaults_are_not_shared():
     assert second.chunk == []
 
 
-def test_action_omnidirectional():
-    frame = Action(
-        t_sec=1,
-        t_nanosec=0,
-        seq=2,
-        action_type="omnidirectional",
-        action=[0.3, 0.1, -0.1],
-    )
-    result = _roundtrip(frame)
-    assert result.action_type == "omnidirectional"
-    assert result.action == [0.3, 0.1, -0.1]
-
-
-def test_action_manipulator():
-    frame = Action(
-        t_sec=2,
-        t_nanosec=0,
-        seq=3,
-        action_type="manipulator",
-        action=[0.1, -0.2, 0.3, 0.4, 0.5, 0.6],
-    )
-    result = _roundtrip(frame)
-    assert result.action_type == "manipulator"
-
-
-def test_action_humanoid():
-    frame = Action(
-        t_sec=3,
-        t_nanosec=0,
-        seq=4,
-        action_type="humanoid",
-        action=[0.0, 0.5, -0.3],
-    )
-    result = _roundtrip(frame)
-    assert result.action_type == "humanoid"
-
-
-def test_cancel_roundtrip():
-    frame = Cancel()
-    result = _roundtrip(frame)
-    assert result.op == "cancel"
-
-
-def test_cancel_ack_roundtrip():
-    frame = CancelAck()
-    result = _roundtrip(frame)
-    assert result.op == "cancel_ack"
-
-
-def test_shutdown_roundtrip():
-    frame = Shutdown()
-    result = _roundtrip(frame)
-    assert result.op == "shutdown"
-
-
-def test_bye_roundtrip():
-    frame = Bye()
-    result = _roundtrip(frame)
-    assert result.op == "bye"
+@pytest.mark.parametrize(
+    ("action_type", "action"),
+    [
+        ("omnidirectional", [0.5, 0.1, 0.2]),
+        ("manipulator", [0.1, -0.2, 0.3, 0.4, 0.5, 0.6]),
+        ("humanoid", [0.0, 0.5, -0.3]),
+    ],
+    ids=["omnidirectional", "manipulator", "humanoid"],
+)
+def test_action_type_roundtrip(action_type, action):
+    result = _roundtrip(Action(t_sec=1, t_nanosec=0, seq=2, action_type=action_type, action=action))
+    assert result.action_type == action_type
+    assert result.action == action
 
 
 def test_error_roundtrip():
