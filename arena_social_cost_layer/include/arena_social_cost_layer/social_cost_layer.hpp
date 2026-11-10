@@ -5,9 +5,11 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "arena_people_msgs/msg/pedestrians.hpp"
+#include "arena_social_cost_layer/agent_class.hpp"
 #include "arena_social_cost_layer/cost_math.hpp"
 #include "nav2_costmap_2d/layer.hpp"
 #include "nav2_costmap_2d/layered_costmap.hpp"
@@ -15,6 +17,18 @@
 
 namespace arena_social_cost_layer
 {
+
+/// A wheelchair, or a wheelchair and its pusher, painted with the anisotropic cost instead of
+/// personal-space disks: the body spans `length` m behind its front point (fx, fy) along heading
+/// yaw.
+struct AnisotropicBody
+{
+  double fx;
+  double fy;
+  double yaw;
+  double length;
+  double speed;
+};
 
 /// Nav2 costmap layer painting personal-space and interaction-group cost from arena_peds.
 class SocialCostLayer : public nav2_costmap_2d::Layer
@@ -38,6 +52,16 @@ private:
   /// Latest roster, nullptr when none was received or it is older than stale_timeout.
   arena_people_msgs::msg::Pedestrians::SharedPtr currentPedestrians();
 
+  /// Wheelchairs and pushed pairs of a roster, the pedestrians they cover marked in `covered`, the
+  /// interaction ids they paint instead of a capsule in `pushes`.
+  std::vector<AnisotropicBody> anisotropicBodies(
+    const arena_people_msgs::msg::Pedestrians & peds, std::vector<bool> & covered,
+    std::vector<int32_t> & pushes);
+
+  /// Whether a pedestrian's ground-truth class (its agent type's interaction_class) takes the
+  /// anisotropic cost.
+  bool isAnisotropic(const arena_people_msgs::msg::Pedestrian & ped);
+
   /// Maps a normalized cost through cost_scale_ and cost_bias_ onto [0, max_cost_value_].
   unsigned char toCellCost(double normalized_cost) const;
 
@@ -59,6 +83,11 @@ private:
   rclcpp::Time last_peds_arrival_{0, 0, RCL_ROS_TIME};
 
   PersonalSpaceParams personal_space_params_{};
+  AnisotropicParams anisotropic_params_{};
+  std::vector<std::string> anisotropic_classes_{"wheelchair"};
+  int push_interaction_type_{13};  // humansim InteractionType.PUSH_WHEELCHAIR
+  AgentClassResolver classes_{};
+  std::unordered_set<std::string> warned_types_{};
   std::vector<double> interaction_weights_{};
 
   double interactionWeight(uint8_t interaction_type) const;

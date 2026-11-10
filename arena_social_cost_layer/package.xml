@@ -13,6 +13,8 @@
   <depend>pluginlib</depend>
   <depend>arena_people_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>yaml_cpp_vendor</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_cmake_cpplint</test_depend>
