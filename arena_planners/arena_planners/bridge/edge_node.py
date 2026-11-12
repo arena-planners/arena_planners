@@ -43,6 +43,7 @@ from .discrete import (
     start_move,
     step_move,
 )
+from .dwb import DwbGoal, Pose, chunk_path, move_path, nominal_timeout_s
 from .protocol import (
     PROTOCOL_VERSION,
     SCHEMA_VERSION,
@@ -73,6 +74,8 @@ from .transport import (
 )
 
 if typing.TYPE_CHECKING:
+    from rclpy.action import ActionClient
+
     from arena_planners.observations.pipeline import Pipeline
 
 
@@ -220,9 +223,14 @@ class PlannerEdgeNode(ArenaMixinNode):
         simulation_namespace: str = "",
         velocity_limits: dict[str, tuple[float, float]] | None = None,
         deadline_s: float = 0.0,
+        executor: str = "bridge",
         **kwargs: object,
     ) -> None:
         super().__init__(node_name, namespace=namespace, use_global_arguments=False, **kwargs)
+        if executor not in ("bridge", "dwb"):
+            raise ValueError(f"executor {executor!r} not in ('bridge', 'dwb')")
+        self._executor_kind = executor
+        self._follow_path_client: ActionClient | None = None
         self._manifest_raw = manifest
         self._planner_command = planner_command
         self._cmd_vel_topic = cmd_vel_topic
@@ -236,7 +244,7 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._move_limits = Limits.from_velocity_limits(self._velocity_limits)
         self._chunk_config = ChunkConfig()
         self._chunk_limits = chunk_limits(self._chunk_config, self._velocity_limits)
-        self._execution: Move | WaypointChunk | VelocityChunk | None = None
+        self._execution: Move | WaypointChunk | VelocityChunk | DwbGoal | None = None
 
         self._obs_manager: Pipeline | None = None
         self._proc: PlannerProcess | None = None
@@ -289,6 +297,16 @@ class PlannerEdgeNode(ArenaMixinNode):
             self._cmd_vel_topic,
             _CMD_VEL_QOS,
         )
+        if self._executor_kind == "dwb":
+            from nav2_msgs.action import FollowPath  # noqa: PLC0415
+            from rclpy.action import ActionClient  # noqa: PLC0415
+
+            # controller_server lives in the robot namespace, next to the cmd_vel topic it publishes
+            action = (
+                self._cmd_vel_topic.rsplit("/", 1)[0] + "/follow_path" if "/" in self._cmd_vel_topic else "follow_path"
+            )
+            self._follow_path_client = ActionClient(self, FollowPath, action)
+            self.get_logger().info(f"executor dwb: moves and chunks go to {action} (Nav2 controller_server, DWB)")
 
         from arena_planners.observations.pipeline import Pipeline  # noqa: PLC0415
 
@@ -672,6 +690,9 @@ class PlannerEdgeNode(ArenaMixinNode):
         if self._cmd_vel_pub is None:
             return
         if not self._driving:
+            if isinstance(self._execution, DwbGoal):
+                self._cancel_dwb(self._execution)
+                self._execution = None
             self._cmd_vel_pub.publish(geometry_msgs.msg.Twist())
             return
         if action.action_type == "discrete":
@@ -726,6 +747,20 @@ class PlannerEdgeNode(ArenaMixinNode):
     def _start_move(self, command: str, amount: float, features: dict) -> None:
         """Begin `command` and drive its first tick, or hold still for an empty or unusable command."""
         pose = self._robot_pose(features)
+        if self._executor_kind == "dwb" and command and pose is not None:
+            try:
+                path = move_path(
+                    command,
+                    amount,
+                    (float(pose[0]), float(pose[1]), float(pose[2])),
+                    self._primitives.forward_m,
+                    self._primitives.turn_deg,
+                )
+            except ValueError as exc:
+                self.get_logger().warning(f"{exc}, holding still")
+            else:
+                self._send_dwb(f"discrete {command!r}", path, release_after_s=None)
+                return
         if command and pose is None:
             self.get_logger().warning(f"cannot start discrete {command!r}: robot_pose missing or malformed")
         elif command and pose is not None:
@@ -742,6 +777,11 @@ class PlannerEdgeNode(ArenaMixinNode):
 
     def _start_chunk(self, kind: str, entries: list[list[float]], features: dict) -> None:
         """Begin a `kind` chunk and drive its first tick, or hold still for an empty or unusable chunk."""
+        pose = self._robot_pose(features)
+        if self._executor_kind == "dwb" and kind == "waypoints" and len(entries) and pose is not None:
+            path = chunk_path(entries, (float(pose[0]), float(pose[1]), float(pose[2])))
+            self._send_dwb(f"{kind} chunk", path, release_after_s=float(self._chunk_config.execute_s))
+            return
         if len(entries):
             t_s = self.sim_time.to_seconds()
             try:
@@ -760,6 +800,19 @@ class PlannerEdgeNode(ArenaMixinNode):
         """Publish this tick's twist for the move or chunk in progress, True while it continues."""
         execution = self._execution
         assert execution is not None
+        if isinstance(execution, DwbGoal):
+            done, timed_out = execution.step(t_s)
+            if execution.rejected:
+                self.get_logger().warning(
+                    f"DWB rejected the {execution.what} goal (is controller_server up?), holding still"
+                )
+                self._publish_twist(0.0, 0.0)
+            if timed_out:
+                self.get_logger().warning(f"DWB {execution.what} timed out at sim t={t_s:.2f}s, cancelling")
+                self._cancel_dwb(execution)
+            if done:
+                self._execution = None
+            return not done  # DWB publishes cmd_vel itself; the bridge stays silent
         pose = self._robot_pose(features)
         if isinstance(execution, Move):
             step = step_move(execution, pose, t_s)
@@ -778,8 +831,51 @@ class PlannerEdgeNode(ArenaMixinNode):
 
     def _stop_execution(self) -> None:
         """Drop the move or chunk in progress and stop the robot."""
+        if isinstance(self._execution, DwbGoal):
+            self._cancel_dwb(self._execution)
         self._execution = None
         self._publish_twist(0.0, 0.0)
+
+    def _send_dwb(self, what: str, path: list[Pose], release_after_s: float | None) -> None:
+        """Send a map-frame path as a FollowPath goal; a newer goal preempts the running one."""
+        import nav_msgs.msg  # noqa: PLC0415
+        from nav2_msgs.action import FollowPath  # noqa: PLC0415
+
+        t_s = self.sim_time.to_seconds()
+        if self._follow_path_client is None or not self._follow_path_client.server_is_ready():
+            self.get_logger().warning(
+                f"executor dwb: follow_path server not ready, holding still instead of the {what}"
+            )
+            self._publish_twist(0.0, 0.0)
+            return
+        msg = nav_msgs.msg.Path()
+        msg.header.frame_id = self._target_frame
+        for x, y, yaw in path:
+            ps = geometry_msgs.msg.PoseStamped()
+            ps.header.frame_id = self._target_frame
+            ps.pose.position.x, ps.pose.position.y = float(x), float(y)
+            ps.pose.orientation.z, ps.pose.orientation.w = math.sin(yaw / 2.0), math.cos(yaw / 2.0)
+            msg.poses.append(ps)
+        goal = FollowPath.Goal()
+        goal.path = msg
+        lin = float(self._velocity_limits.get("linear", (0.0, 0.5))[1])
+        ang = float(self._velocity_limits.get("angular", (0.0, 1.0))[1])
+        lin = lin if 0.0 < lin < math.inf else 0.5
+        ang = ang if 0.0 < ang < math.inf else 1.0
+        execution = DwbGoal(
+            what,
+            path,
+            t_s,
+            nominal_timeout_s(path, float(lin), float(ang)),
+            None if release_after_s is None else t_s + release_after_s,
+        )
+        execution.send_future = self._follow_path_client.send_goal_async(goal)
+        self._execution = execution
+
+    def _cancel_dwb(self, execution: DwbGoal) -> None:
+        if execution.goal_handle is not None:
+            with contextlib.suppress(Exception):
+                execution.goal_handle.cancel_goal_async()
 
     def _publish_twist(self, v: float, omega: float) -> None:
         if self._cmd_vel_pub is None:
