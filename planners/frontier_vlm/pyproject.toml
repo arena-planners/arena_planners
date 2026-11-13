@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arena_planners_frontier_vlm"
+version = "0.3.0"
+description = "Frontier vision-language model navigation planner for Arena"
+requires-python = ">=3.10"
+dependencies = [
+    "arena_planners",
+    "anthropic",
+    "numpy",
+    "opencv-python-headless",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.uv.sources]
+arena_planners = { git = "https://github.com/arena-planners/arena_planners.git", branch = "jazzy", subdirectory = "arena_planners" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fvlm*"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "tools"]
+testpaths = ["tests"]
