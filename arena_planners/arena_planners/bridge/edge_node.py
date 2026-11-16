@@ -19,6 +19,7 @@ import rclpy.publisher
 import rclpy.qos
 import yaml
 from arena_rclpy_mixins import ArenaMixinNode
+from arena_rclpy_mixins.params import Param, Range, declare
 from arena_robots.lockstep_beat import LockstepBeat
 from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
@@ -258,7 +259,10 @@ class PlannerEdgeNode(ArenaMixinNode):
         self._last_heartbeat_ns: int = 0
         self._heartbeat_period_s: float = 0.0
 
-        self._rate = self.ROSParam[float]("planner_rate_hz", 10.0)
+        self._rate = declare(
+            self,
+            Param[float]("planner_rate_hz", 10.0, "Planner step rate in Hz.", constraint=Range(lo=0.0, lo_open=True)),
+        )
         self._dropped_features_logged: set[str] = set()
         self._interval: float = 1.0 / self._rate.value
         self._follow_interval: float = 1.0 / _FOLLOW_RATE_HZ

@@ -26,7 +26,7 @@ Each subdirectory is a submodule (one planner). Required files:
 
   The bridge dispatches per robot: holonomic robots receive `omnidirectional` actions verbatim; diff-drive robots receive the projection `(v=|vel|, omega=heading_err/step_dt + omega_in)` applied by [`bridge/projection.py`](../arena_planners/arena_planners/bridge/projection.py). Planners must not reinvent that projection inside `step()`.
   `sensor_msgs/LaserScan` datasources always deliver the canonical scan: ray 0 along the robot heading, CCW over a full circle, non-returns and sub-`range_min` values equal to `range_max`, everything clipped to `[range_min, range_max]`. `params.canonical_beams` sets the ray count (mandatory for models with a fixed input width), otherwise the message's own count is kept. Planners never see a simulator's raw beam layout.
-- `package.xml`, `pyproject.toml`: ROS + Python packaging.
+- `package.xml`, `pyproject.toml`: ROS + Python packaging. `CMakeLists.txt` builds the venv with `uv_venv(PROJECTFILE pyproject.toml)` from [ament_cmake_venv_uv](https://github.com/voshch/ament_cmake_venv_uv), plus `POST_INSTALL "<uv pip install arguments>"` for an install `pyproject.toml` cannot express. The venv is keyed by a hash of the planner's files and those arguments and is read-only, so nothing installs into it after `uv_venv` builds it.
 - `weights.yaml`: optional checkpoint manifest. Every entry is either a Hugging Face file or a URL, and every entry needs `sha256`:
 
   ```yaml

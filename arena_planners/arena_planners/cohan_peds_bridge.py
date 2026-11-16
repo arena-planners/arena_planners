@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import math
-import typing
 
 import rclpy
 import rclpy.duration
 import rclpy.time
 import tf2_ros
 from arena_people_msgs.msg import Pedestrians
+from arena_rclpy_mixins.params import Param, declare
 from arena_rclpy_mixins.spin import spin_node
 from cohan_msgs.msg import AgentType, TrackedAgent, TrackedAgents, TrackedSegment, TrackedSegmentType
 from geometry_msgs.msg import PoseStamped, PoseWithCovariance, TransformStamped, Twist, TwistWithCovariance
@@ -50,10 +50,17 @@ class CohanPedsBridge(Node):
     def __init__(self) -> None:
         super().__init__("cohan_peds_bridge")
 
-        self._target_frame: str = typing.cast(str, self.declare_parameter("target_frame", "map").value)
-        self._source_frame_fallback: str = typing.cast(
-            str, self.declare_parameter("source_frame_fallback", "map").value
-        )
+        self._target_frame = declare(
+            self, Param[str]("target_frame", "map", "Frame the pedestrian poses are transformed into.")
+        ).value
+        self._source_frame_fallback = declare(
+            self,
+            Param[str](
+                "source_frame_fallback",
+                "map",
+                "Source frame used when a pedestrians message header has an empty frame_id.",
+            ),
+        ).value
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)

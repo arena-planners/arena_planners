@@ -10,7 +10,10 @@ import urllib.request
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import NamedTuple, NotRequired, TypedDict
+from typing import TYPE_CHECKING, NamedTuple, TypedDict
+
+if TYPE_CHECKING:
+    from typing import NotRequired
 
 _MANIFEST = "weights.yaml"
 _BLOCK = 8 << 20

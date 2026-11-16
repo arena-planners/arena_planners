@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import pathlib
+import sys
 import time
 import typing
 
@@ -37,6 +38,7 @@ from arena_planners.bridge.transport import (
     ZmqPushTransport,
     endpoints_from_env,
 )
+from arena_planners.trace import Tracer
 
 _log = logging.getLogger(__name__)
 
@@ -103,6 +105,9 @@ class PlannerSDK:
         self._heartbeat_seq: int = 0
         self._last_heartbeat_ns: int = 0
         self._active = False
+        self._tracer = Tracer.from_env(
+            pathlib.Path(sys.argv[0]).resolve().parent.name if sys.argv and sys.argv[0] else ""
+        )
 
     @property
     def planner_config(self) -> dict:
@@ -141,11 +146,18 @@ class PlannerSDK:
                 )
             )
             return
+        t0 = time.perf_counter()
         try:
             step = self._as_step(step_fn(frame.features))
         except Exception as exc:
             self._send_data(Error(code="step_failed", msg=repr(exc), severity="error"))
             raise
+        try:
+            self._tracer.step(
+                frame.features, frame.seq, frame.t_sec + frame.t_nanosec * 1e-9, time.perf_counter() - t0, step
+            )
+        except Exception as exc:
+            _log.warning("trace: step not recorded: %r", exc)
         self._send_data(
             Action(
                 t_sec=frame.t_sec,
@@ -196,6 +208,10 @@ class PlannerSDK:
         if isinstance(frame, Reset):
             if on_reset is not None:
                 on_reset(frame.episode_id, frame.initial_state)
+            try:
+                self._tracer.reset(frame.episode_id, frame.initial_state)
+            except Exception as exc:
+                _log.warning("trace: reset not recorded: %r", exc)
             self._active = True
             self._send_control(ResetAck())
             return True
@@ -203,6 +219,10 @@ class PlannerSDK:
             self._active = False
             if on_cancel is not None:
                 on_cancel()
+            try:
+                self._tracer.cancel()
+            except Exception as exc:
+                _log.warning("trace: cancel not recorded: %r", exc)
             self._send_control(CancelAck())
             return True
         if isinstance(frame, Shutdown):
