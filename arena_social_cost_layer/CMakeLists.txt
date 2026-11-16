@@ -14,9 +14,13 @@ find_package(nav2_costmap_2d REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(arena_people_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(yaml_cpp_vendor REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 add_library(arena_social_cost_layer SHARED
   src/social_cost_layer.cpp
+  src/agent_class.cpp
 )
 target_include_directories(arena_social_cost_layer PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -28,7 +32,9 @@ ament_target_dependencies(arena_social_cost_layer
   pluginlib
   arena_people_msgs
   geometry_msgs
+  ament_index_cpp
 )
+target_link_libraries(arena_social_cost_layer yaml-cpp)
 
 pluginlib_export_plugin_description_file(nav2_costmap_2d arena_social_cost_layer.xml)
 
@@ -50,10 +56,18 @@ if(BUILD_TESTING)
   target_include_directories(test_cost_math PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+
+  ament_add_gtest(test_agent_class test/test_agent_class.cpp src/agent_class.cpp)
+  target_include_directories(test_agent_class PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(test_agent_class ament_index_cpp)
+  target_link_libraries(test_agent_class yaml-cpp)
 endif()
 
 ament_export_include_directories(include)
 ament_export_libraries(arena_social_cost_layer)
-ament_export_dependencies(rclcpp nav2_costmap_2d pluginlib arena_people_msgs geometry_msgs)
+ament_export_dependencies(
+  rclcpp nav2_costmap_2d pluginlib arena_people_msgs geometry_msgs ament_index_cpp yaml_cpp_vendor)
 
 ament_package()

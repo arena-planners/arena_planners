@@ -1,6 +1,8 @@
 // Copyright 2026 ductainguyen
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "arena_social_cost_layer/cost_math.hpp"
 
 using arena_social_cost_layer::groupBetweenCost;
@@ -10,6 +12,10 @@ using arena_social_cost_layer::PersonalSpaceParams;
 using arena_social_cost_layer::Box;
 using arena_social_cost_layer::segmentBox;
 using arena_social_cost_layer::unionBox;
+using arena_social_cost_layer::AnisotropicParams;
+using arena_social_cost_layer::anisotropicCost;
+using arena_social_cost_layer::anisotropicReach;
+using arena_social_cost_layer::bodyOffset;
 
 TEST(PersonalSpaceCost, DecaysWithDistance)
 {
@@ -103,4 +109,61 @@ TEST(UnionBox, CoversBothBoxes)
   EXPECT_DOUBLE_EQ(merged.min_y, -3.0);
   EXPECT_DOUBLE_EQ(merged.max_x, 5.0);
   EXPECT_DOUBLE_EQ(merged.max_y, 1.0);
+}
+
+TEST(AnisotropicCost, AheadAndBehindCostMoreThanBeside)
+{
+  const AnisotropicParams p{};
+  const double yaw = 0.7;
+  const double c = std::cos(yaw);
+  const double s = std::sin(yaw);
+  for (const double d : {0.5, 1.0, 1.5}) {
+    const double ahead = anisotropicCost(bodyOffset(d * c, d * s, 0.0, 0.0, yaw, 0.0), p, 0.0);
+    const double behind = anisotropicCost(bodyOffset(-d * c, -d * s, 0.0, 0.0, yaw, 0.0), p, 0.0);
+    const double left = anisotropicCost(bodyOffset(-d * s, d * c, 0.0, 0.0, yaw, 0.0), p, 0.0);
+    const double right = anisotropicCost(bodyOffset(d * s, -d * c, 0.0, 0.0, yaw, 0.0), p, 0.0);
+    EXPECT_GT(ahead, left) << "d=" << d;
+    EXPECT_GT(behind, left) << "d=" << d;
+    EXPECT_NEAR(left, right, 1e-12);
+    EXPECT_GT(ahead, behind) << "the front reaches further than the back";
+  }
+}
+
+TEST(AnisotropicCost, PeaksOnTheBodyAndStopsAtTheCutoff)
+{
+  const AnisotropicParams p{};
+  EXPECT_DOUBLE_EQ(anisotropicCost(bodyOffset(0.0, 0.0, 0.0, 0.0, 0.0, 0.0), p, 0.0), p.amplitude);
+  const double edge = p.cutoff * p.sigma_side;
+  EXPECT_GT(anisotropicCost(bodyOffset(0.0, 0.99 * edge, 0.0, 0.0, 0.0, 0.0), p, 0.0), 0.0);
+  EXPECT_EQ(anisotropicCost(bodyOffset(0.0, 1.01 * edge, 0.0, 0.0, 0.0, 0.0), p, 0.0), 0.0);
+  EXPECT_DOUBLE_EQ(anisotropicReach(p, 0.0), p.cutoff * p.sigma_front);
+}
+
+TEST(AnisotropicCost, SpeedStretchesOnlyTheFront)
+{
+  const AnisotropicParams p{};
+  const auto ahead = bodyOffset(1.5, 0.0, 0.0, 0.0, 0.0, 0.0);
+  const auto behind = bodyOffset(-1.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+  EXPECT_GT(anisotropicCost(ahead, p, 1.0), anisotropicCost(ahead, p, 0.0));
+  EXPECT_DOUBLE_EQ(anisotropicCost(behind, p, 1.0), anisotropicCost(behind, p, 0.0));
+  EXPECT_GT(anisotropicReach(p, 1.0), anisotropicReach(p, 0.0));
+}
+
+TEST(AnisotropicCost, APushedPairIsFlatAlongItsSpan)
+{
+  // chair front at the origin heading +x, pusher 0.7 m behind:
+  // beside the pair the cost only falls off sideways
+  const AnisotropicParams p{};
+  const double length = 0.7;
+  const double beside_chair = anisotropicCost(bodyOffset(0.0, 0.6, 0.0, 0.0, 0.0, length), p, 0.0);
+  const double beside_pusher = anisotropicCost(bodyOffset(-0.7, 0.6, 0.0, 0.0, 0.0, length), p,
+    0.0);
+  EXPECT_DOUBLE_EQ(beside_chair, beside_pusher);
+  // behind the pusher it is measured from her, not from the chair
+  const double behind_pusher = anisotropicCost(bodyOffset(-0.7 - 0.6, 0.0, 0.0, 0.0, 0.0, length),
+    p, 0.0);
+  const double behind_lone_chair = anisotropicCost(bodyOffset(-0.6, 0.0, 0.0, 0.0, 0.0, 0.0), p,
+    0.0);
+  EXPECT_DOUBLE_EQ(behind_pusher, behind_lone_chair);
+  EXPECT_GT(behind_pusher, beside_pusher);
 }
