@@ -14,6 +14,8 @@
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>arena_people_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf2_geometry_msgs</exec_depend>
   <exec_depend>cohan_msgs</exec_depend>
